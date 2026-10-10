@@ -63,11 +63,6 @@ pending_betaal_product = {}       # user_id -> product tekst
 pending_betaal_image = {}         # user_id -> image_url
 pending_betaal_link = {}          # user_id -> betaallink ingevoerd door staff
 
-# Geheugen voor staff levering na betaling
-pending_staff_files = {}          # staff_id -> lijst van file URL's of attachment objects
-pending_staff_msg = {}            # staff_id -> succesbericht tekst
-pending_staff_target_member = {}  # staff_id -> discord.Member van de klant
-
 EXACT_PARTNER_BERICHT = (
     "# 👋 AVJ Online Winkel is een online winkel met verschillende Roblox producten.\n"
     "> \n"
@@ -117,11 +112,17 @@ class TicketView(discord.ui.View):
 
 # --- BETAAL TICKET / PANEL VIEWS & MODALS ---
 
-class BetaalStaffMsgModal(discord.ui.Modal, title="Stap 1: Succesbericht invoeren"):
+class BetaalStaffModal(discord.ui.Modal, title="Bestelling Afhandelen (Product & Bestand)"):
     bericht_inhoud = discord.ui.TextInput(
         label="Bericht naar klant",
         style=discord.TextStyle.paragraph,
         placeholder="Typ hier het succesbericht voor de klant...",
+        required=True
+    )
+    download_links = discord.ui.TextInput(
+        label="Download Link(s) / Product URL",
+        style=discord.TextStyle.paragraph,
+        placeholder="Plak hier de downloadlinks of instructies...",
         required=True
     )
 
@@ -132,68 +133,21 @@ class BetaalStaffMsgModal(discord.ui.Modal, title="Stap 1: Succesbericht invoere
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        staff_id = interaction.user.id
-        pending_staff_msg[staff_id] = self.bericht_inhoud.value
-        pending_staff_target_member[staff_id] = self.member
-        pending_staff_files[staff_id] = [] # Reset lijst van bestanden
-
-        await interaction.followup.send(
-            "📝 Bericht opgeslagen!\n\n"
-            "**Stap 2:** Stuur nu **één of meerdere bestanden / downloads** (door ze in deze chat te slepen of te uploaden) en klik daarna op de knop **'Bestanden verzonden'** in je DM of chat.",
-            view=BetaalStaffFileUploadView(staff_id, self.original_message),
-            ephemeral=True
-        )
-
-
-class BetaalStaffFileUploadView(discord.ui.View):
-    def __init__(self, staff_id: int, original_message: discord.Message):
-        super().__init__(timeout=300)
-        self.staff_id = staff_id
-        self.original_message = original_message
-
-    @discord.ui.button(label="Bestanden verzonden", style=discord.ButtonStyle.green, emoji="📁", custom_id="staff_files_done_btn")
-    async def files_done(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
         
-        files_list = pending_staff_files.get(self.staff_id, [])
-        success_msg = pending_staff_msg.get(self.staff_id, "Geen bericht opgegeven.")
-        target_member = pending_staff_target_member.get(self.staff_id)
-
-        if not target_member:
-            await interaction.followup.send("❌ Er is een fout opgetreden: klant niet gevonden.", ephemeral=True)
-            return
-
-        # Stuur alles door naar de klant
         try:
-            await target_member.send(
+            await self.member.send(
                 f"✅ **Jouw betaling is goedgekeurd en afgehandeld!**\n\n"
-                f"**Bericht:**\n{success_msg}"
+                f"**Bericht:**\n{self.bericht_inhoud.value}\n\n"
+                f"**Downloads / Producten:**\n{self.download_links.value}"
             )
-            if files_list:
-                # Stuur alle bestanden mee
-                discord_files = [await f.to_file() for f in files_list]
-                await target_member.send(content="📂 **Jouw downloads / producten:**", files=discord_files)
         except discord.Forbidden:
             pass
 
-        for child in self.children:
-            child.disabled = True
+        await interaction.followup.send("Je hebt de bestelling succesvol afgerond en doorgestuurd naar de klant via het template!", ephemeral=True)
         try:
-            await interaction.message.edit(view=self)
+            await self.original_message.edit(content="✅ **Bestelling goedgekeurd en afgehandeld.**", view=None)
         except Exception:
             pass
-
-        try:
-            await self.original_message.edit(content="✅ **Bestelling goedgekeurd en bestanden geleverd aan klant.**", view=None)
-        except Exception:
-            pass
-
-        # Opschonen geheugen
-        pending_staff_files.pop(self.staff_id, None)
-        pending_staff_msg.pop(self.staff_id, None)
-        pending_staff_target_member.pop(self.staff_id, None)
-
-        await interaction.followup.send("✅ De bestanden en het bericht zijn succesvol naar de klant verzonden!", ephemeral=True)
 
 
 class BetaalStaffDenyModal(discord.ui.Modal, title="Betaling Afkeuren"):
@@ -231,7 +185,7 @@ class BetaalStaffLogReviewView(discord.ui.View):
 
     @discord.ui.button(label="Download / Product", style=discord.ButtonStyle.green, emoji="📂", custom_id="betaal_log_accept")
     async def accept_payment(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(BetaalStaffMsgModal(self.member, interaction.message))
+        await interaction.response.send_modal(BetaalStaffModal(self.member, interaction.message))
 
     @discord.ui.button(label="Afkeuren", style=discord.ButtonStyle.red, custom_id="betaal_log_deny")
     async def deny_payment(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -351,7 +305,7 @@ class BetaalProductSubmitView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
 
         if self.user_id not in pending_betaal_product:
-            await interaction.followup.send("Je hebt nog geen product opgegeven in deze DM! Stuur eerst de tekst van het product.", ephemeral=True)
+            await interaction.followup.send("Niks gezien in de chat. Type iets en klik opnieuw.", ephemeral=True)
             return
 
         try:
@@ -363,7 +317,7 @@ class BetaalProductSubmitView(discord.ui.View):
 
         try:
             await interaction.user.send(
-                content="📸 **Stap 2:** Stuur nu afbeeldingen van de shop onder deze chat als bewijsmateriaal en klik daarna op de knop hieronder.",
+                content="📸 **Stap 2:** Maak een afbeelding van welk product je wilt uit de shop.",
                 view=BetaalImageSubmitView(self.user_id)
             )
         except discord.Forbidden:
@@ -390,7 +344,7 @@ class BetaalStartView(discord.ui.View):
             await interaction.followup.send("❌ Ik kon je geen DM sturen. Zet je privéberichten open!", ephemeral=True)
 
 
-# --- PARTNER & MODAL CLASSES (Bestaand) ---
+# --- PARTNER & MODAL CLASSES ---
 
 class DenyReasonModal(discord.ui.Modal, title="Aanvraag Afkeuren"):
     reden = discord.ui.TextInput(
@@ -649,16 +603,9 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # DM afhandeling voor Partners, Betaaltickets en Staff bestanden uploaden
+    # DM afhandeling voor Partners en Betaaltickets
     if isinstance(message.channel, discord.DMChannel):
         user_id = message.author.id
-
-        # Als staff bestanden aan het uploaden is voor de geleverde bestelling
-        if message.attachments and user_id in pending_staff_files:
-            for att in message.attachments:
-                pending_staff_files[user_id].append(att)
-            await message.channel.send(f"📂 Bestand succesvol toegevoegd! (Totaal: {len(pending_staff_files[user_id])} bestanden). Klik op **'Bestanden verzonden'** wanneer je klaar bent.")
-            return
 
         # Afbeeldingen opvangen in DM voor gewone gebruiker
         if message.attachments:
@@ -670,7 +617,7 @@ async def on_message(message):
                 await message.channel.send("📸 Partner foto ontvangen! Klik op **'Foto verstuurd'**.")
 
         if message.content:
-            # Check of de gebruiker "betaald" typt in DM
+            # Controleren of de persoon heeft gezegd dat hij betaald heeft
             if message.content.strip().lower() == "betaald":
                 guild = bot.guilds[0] if bot.guilds else None
                 log_betaal_kanaal = guild.get_channel(CHANNEL_BETAAL_LOGS) if guild else None
@@ -691,7 +638,6 @@ async def on_message(message):
             # Partner tekst opvang
             if user_id in pending_partner_submissions and user_id not in pending_partner_messages:
                 pending_partner_messages[user_id] = message.content
-                await message.channel.send("📝 Partner bericht ontvangen! Klik op **'Partner bericht versturen'**.")
 
     await bot.process_commands(message)
 
