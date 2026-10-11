@@ -20,10 +20,9 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-ROLE_ACCEPTEREN = 1554525725657145354
+# --- CONFIGURATIE ---
+ROLE_ACCEPTEREN_BEHEER = 1556578093081305159  # Alleen deze rol mag partners accepteren & afwijzen
 ROLE_PARTNER_BEHEER = 1541819580173779026
-ROLE_EXTRA_ACCEPTEREN = 1545038388091166790
-ROLE_KORTING_BEHEER = 1475901447404126340
 
 # Discord ID's die ALTIJD overal toegang toe hebben
 OWNER_IDS = [1328766617164972115, 1305271257901695048]
@@ -36,32 +35,24 @@ SAY_ROLE_IDS = [
     1475901447404126340
 ]
 
-CHANNEL_AANVRAAG = 1555910106040762408
-CHANNEL_TICKET = 1554523651745783940
-CHANNEL_PARTNER_PUBLIC = 1476292683508089056
-CHANNEL_PARTNER_PANEL = 1542844065702350878
-CHANNEL_LOGS = 1555929585877524500
-CHANNEL_REVIEW = 1487908079373652050
-CHANNEL_BETAAL_AANVRAAG = 1555919409162494012
-CHANNEL_BETAAL_LOGS = 1558561264295485470
+# Kanalen
+CHANNEL_AANVRAAG = 1558743224384757820        # 1e indiening (Beoordelingskanaal)
+CHANNEL_PARTNER_PUBLIC = 1558743246883131432  # 2e indiening (Openbaar partnerkanaal)
+CHANNEL_PARTNER_PANEL = 1542844065702350878   # Waar het partnerpanel staat
+CHANNEL_TICKET = 1554523651745783940          # Waar het ticketpanel staat
+CHANNEL_LOGS = 1555929585877524500            # Logkanaal
+CHANNEL_REVIEW = 1487908079373652050          # Reviewkanaal
 
-# --- TIKTOK LIVE CONFIGURATIE (Meerdere kanalen) ---
+# --- TIKTOK LIVE CONFIGURATIE ---
 TIKTOK_HANDLES = ["faab9999_", "jcd_18"]
 NOTIFICATION_CHANNEL_ID = 1555933500274642965
 
 is_live_notified = {handle: False for handle in TIKTOK_HANDLES}
 
+# Geheugen voor partnersysteem
 pending_partner_submissions = {}  # user_id -> image_url
 pending_partner_messages = {}     # user_id -> partner bericht tekst
 partner_cooldowns = {}            # user_id -> datetime van laatste aanvraag
-
-# Geheugen voor kortingscodes
-actieve_kortingscodes = {}        # code -> kortingspercentage
-
-# Geheugen voor betaaltickets
-pending_betaal_product = {}       # user_id -> product tekst
-pending_betaal_image = {}         # user_id -> image_url
-pending_betaal_link = {}          # user_id -> betaallink ingevoerd door staff
 
 EXACT_PARTNER_BERICHT = (
     "# 👋 AVJ Online Winkel is een online winkel met verschillende Roblox producten.\n"
@@ -83,6 +74,8 @@ EXACT_PARTNER_BERICHT = (
     "> 🔗 https://discord.gg/hBeUBKUAsu"
 )
 
+
+# --- TICKET SYSTEEM VIEWS ---
 
 class TicketView(discord.ui.View):
     def __init__(self):
@@ -110,241 +103,7 @@ class TicketView(discord.ui.View):
         await interaction.followup.send(f"Je ticket is aangemaakt: {ticket_channel.mention}", ephemeral=True)
 
 
-# --- BETAAL TICKET / PANEL VIEWS & MODALS ---
-
-class BetaalStaffModal(discord.ui.Modal, title="Bestelling Afhandelen (Product & Bestand)"):
-    bericht_inhoud = discord.ui.TextInput(
-        label="Bericht naar klant",
-        style=discord.TextStyle.paragraph,
-        placeholder="Typ hier het succesbericht voor de klant...",
-        required=True
-    )
-    download_links = discord.ui.TextInput(
-        label="Download Link(s) / Product URL",
-        style=discord.TextStyle.paragraph,
-        placeholder="Plak hier de downloadlinks of instructies...",
-        required=True
-    )
-
-    def __init__(self, member: discord.Member, original_message: discord.Message):
-        super().__init__()
-        self.member = member
-        self.original_message = original_message
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        
-        try:
-            await self.member.send(
-                f"✅ **Jouw betaling is goedgekeurd en afgehandeld!**\n\n"
-                f"**Bericht:**\n{self.bericht_inhoud.value}\n\n"
-                f"**Downloads / Producten:**\n{self.download_links.value}"
-            )
-        except discord.Forbidden:
-            pass
-
-        await interaction.followup.send("Je hebt de bestelling succesvol afgerond en doorgestuurd naar de klant via het template!", ephemeral=True)
-        try:
-            await self.original_message.edit(content="✅ **Bestelling goedgekeurd en afgehandeld.**", view=None)
-        except Exception:
-            pass
-
-
-class BetaalStaffDenyModal(discord.ui.Modal, title="Betaling Afkeuren"):
-    reden = discord.ui.TextInput(
-        label="Reden van afkeuring",
-        style=discord.TextStyle.paragraph,
-        placeholder="Geef de reden op waarom de betaling is afgekeurd...",
-        required=True
-    )
-
-    def __init__(self, member: discord.Member, original_message: discord.Message):
-        super().__init__()
-        self.member = member
-        self.original_message = original_message
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-
-        try:
-            await self.member.send(f"❌ Jouw betaling is **afgekeurd**.\n**Reden:** {self.reden.value}")
-        except discord.Forbidden:
-            pass
-
-        await interaction.followup.send(f"Betaling afgekeurd met reden: {self.reden.value}", ephemeral=True)
-        try:
-            await self.original_message.edit(content=f"❌ **Bestelling afgekeurd.**\nReden: {self.reden.value}", view=None)
-        except Exception:
-            pass
-
-
-class BetaalStaffLogReviewView(discord.ui.View):
-    def __init__(self, member: discord.Member):
-        super().__init__(timeout=None)
-        self.member = member
-
-    @discord.ui.button(label="Download / Product", style=discord.ButtonStyle.green, emoji="📂", custom_id="betaal_log_accept")
-    async def accept_payment(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(BetaalStaffModal(self.member, interaction.message))
-
-    @discord.ui.button(label="Afkeuren", style=discord.ButtonStyle.red, custom_id="betaal_log_deny")
-    async def deny_payment(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(BetaalStaffDenyModal(self.member, interaction.message))
-
-
-class BetaalStaffReviewView(discord.ui.View):
-    def __init__(self, member: discord.Member):
-        super().__init__(timeout=None)
-        self.member = member
-
-    @discord.ui.button(label="Accepteren (Betaallink invoeren)", style=discord.ButtonStyle.green, custom_id="betaal_accept_btn")
-    async def accept_request(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(BetaalLinkModal(self.member, interaction.message, self))
-
-    @discord.ui.button(label="Afkeuren", style=discord.ButtonStyle.red, custom_id="betaal_deny_btn")
-    async def deny_request(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(DenyReasonModal(self.member, interaction.message, self))
-
-
-class BetaalLinkModal(discord.ui.Modal, title="Betaallink Invoeren"):
-    betaallink = discord.ui.TextInput(
-        label="Betaallink",
-        style=discord.TextStyle.short,
-        placeholder="Plak hier de betaallink voor de klant...",
-        required=True
-    )
-
-    def __init__(self, member: discord.Member, original_message: discord.Message, view_instance: discord.ui.View):
-        super().__init__()
-        self.member = member
-        self.original_message = original_message
-        self.view_instance = view_instance
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-
-        for child in self.view_instance.children:
-            child.disabled = True
-        try:
-            await self.original_message.edit(view=self.view_instance)
-        except Exception:
-            pass
-
-        pending_betaal_link[self.member.id] = self.betaallink.value
-
-        try:
-            await self.member.send(
-                f"💳 **Betaallink Ontvangen!**\n\n"
-                f"Hier is je betaallink om door te gaan: {self.betaallink.value}\n\n"
-                f"⚠️ **Professionele Uitleg:** Om verder te gaan met je bestelling en de volgende stappen te doorlopen, dien je deze link te openen en te betalen.\n"
-                f"Zodra je de betaling hebt voltooid, typ je het woord **'betaald'** hier in deze chat!"
-            )
-        except discord.Forbidden:
-            pass
-
-        await interaction.followup.send(f"Betaallink succesvol verzonden naar {self.member.mention}!", ephemeral=True)
-
-
-class BetaalImageSubmitView(discord.ui.View):
-    def __init__(self, user_id: int):
-        super().__init__(timeout=300)
-        self.user_id = user_id
-
-    @discord.ui.button(label="Afbeelding verstuurd", style=discord.ButtonStyle.blurple, emoji="📸", custom_id="betaal_image_sent_btn")
-    async def image_sent(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-
-        if self.user_id not in pending_betaal_image:
-            await interaction.followup.send("Je hebt nog geen afbeeldingen / screenshots ingestuurd in deze DM!", ephemeral=True)
-            return
-
-        try:
-            for child in self.children:
-                child.disabled = True
-            await interaction.message.edit(view=self)
-        except Exception:
-            pass
-
-        guild = bot.guilds[0] if bot.guilds else None
-        if not guild:
-            await interaction.followup.send("Kan geen verbinding maken met de server.", ephemeral=True)
-            return
-
-        betaal_kanaal = guild.get_channel(CHANNEL_BETAAL_AANVRAAG)
-        if not betaal_kanaal:
-            await interaction.followup.send("Het betaal-aanvraagkanaal kon niet worden gevonden.", ephemeral=True)
-            return
-
-        product_tekst = pending_betaal_product.get(self.user_id, "Geen product opgegeven.")
-        img_url = pending_betaal_image.get(self.user_id)
-
-        embed = discord.Embed(
-            title="🧾 Nieuwe Betaal Aanvraag",
-            description=f"**Gebruiker:** {interaction.user.mention} (`{interaction.user.id}`)\n\n**Gewenst Product:**\n{product_tekst}\n\n**Ingezonden Shop Afbeelding:**",
-            color=discord.Color.green()
-        )
-        if img_url:
-            embed.set_image(url=img_url)
-
-        try:
-            await betaal_kanaal.send(embed=embed, view=BetaalStaffReviewView(interaction.user))
-        except Exception as e:
-            await interaction.followup.send(f"Fout bij versturen naar aanvraagkanaal: {e}", ephemeral=True)
-            return
-
-        await interaction.followup.send("Je betaalticket is definitief ingediend! De staf zal dit zo snel mogelijk bekijken.", ephemeral=True)
-
-
-class BetaalProductSubmitView(discord.ui.View):
-    def __init__(self, user_id: int):
-        super().__init__(timeout=300)
-        self.user_id = user_id
-
-    @discord.ui.button(label="Bericht indienen", style=discord.ButtonStyle.green, emoji="📤", custom_id="betaal_product_done_btn")
-    async def product_done(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-
-        if self.user_id not in pending_betaal_product:
-            await interaction.followup.send("Niks gezien in de chat. Type iets en klik opnieuw.", ephemeral=True)
-            return
-
-        try:
-            for child in self.children:
-                child.disabled = True
-            await interaction.message.edit(view=self)
-        except Exception:
-            pass
-
-        try:
-            await interaction.user.send(
-                content="📸 **Stap 2:** Maak een afbeelding van welk product je wilt uit de shop.",
-                view=BetaalImageSubmitView(self.user_id)
-            )
-        except discord.Forbidden:
-            pass
-
-
-class BetaalStartView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="Betaalticket Aanmaken", style=discord.ButtonStyle.success, emoji="💳", custom_id="betaalticket_start_btn")
-    async def start_betaalticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        user_id = interaction.user.id
-
-        try:
-            dm = await interaction.user.create_dm()
-            await dm.send(
-                content="🛍 **Stap 1:** Welk product zou je willen? Typ en stuur de naam/omschrijving van het product in deze DM en klik daarna op de knop hieronder.",
-                view=BetaalProductSubmitView(user_id)
-            )
-            await interaction.followup.send("Ik heb je een privébericht (DM) gestuurd om je betaalticket te starten!", ephemeral=True)
-        except discord.Forbidden:
-            await interaction.followup.send("❌ Ik kon je geen DM sturen. Zet je privéberichten open!", ephemeral=True)
-
-
-# --- PARTNER & MODAL CLASSES ---
+# --- PARTNER SYSTEEM VIEWS & MODALS ---
 
 class DenyReasonModal(discord.ui.Modal, title="Aanvraag Afkeuren"):
     reden = discord.ui.TextInput(
@@ -385,9 +144,10 @@ class PartnerReviewView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id in OWNER_IDS:
             return True
+        
         role_ids = [role.id for role in interaction.user.roles]
-        if ROLE_ACCEPTEREN not in role_ids and ROLE_EXTRA_ACCEPTEREN not in role_ids:
-            await interaction.response.send_message("Jij hebt geen toestemming om dit te beoordelen.", ephemeral=True)
+        if ROLE_ACCEPTEREN_BEHEER not in role_ids:
+            await interaction.response.send_message("❌ Jij hebt geen toestemming om deze partneraanvraag te beoordelen.", ephemeral=True)
             return False
         return True
 
@@ -425,7 +185,7 @@ class PartnerReviewView(discord.ui.View):
 
         pending_partner_submissions.pop(self.member.id, None)
         pending_partner_messages.pop(self.member.id, None)
-        await interaction.followup.send("Partner succesvol geaccepteerd!", ephemeral=True)
+        await interaction.followup.send("Partner succesvol geaccepteerd en geplaatst in het partnerkanaal!", ephemeral=True)
 
     @discord.ui.button(label="Afkeuren", style=discord.ButtonStyle.red, custom_id="partner_deny_btn")
     async def deny_partner(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -452,7 +212,7 @@ class PartnerMsgSubmitView(discord.ui.View):
             return
 
         image_url = pending_partner_submissions.get(self.user_id)
-        embed = discord.Embed(title="🤝 Nieuwe Partner Aanvraag", description=f"**Gebruiker:** {interaction.user.mention}\n{user_partner_msg}", color=discord.Color.blue())
+        embed = discord.Embed(title="🤝 Nieuwe Partner Aanvraag", description=f"**Gebruiker:** {interaction.user.mention}\n\n{user_partner_msg}", color=discord.Color.blue())
         if image_url:
             embed.set_image(url=image_url)
 
@@ -587,6 +347,7 @@ async def on_ready():
     except Exception as e:
         print(f"Sync fout: {e}")
 
+    # Verstuur ticket view indien nodig
     ticket_kanaal = bot.get_channel(CHANNEL_TICKET)
     if ticket_kanaal:
         has_view = False
@@ -603,98 +364,20 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # DM afhandeling voor Partners en Betaaltickets
+    # DM afhandeling voor Partners
     if isinstance(message.channel, discord.DMChannel):
         user_id = message.author.id
 
-        # Afbeeldingen opvangen in DM voor gewone gebruiker
         if message.attachments:
-            if user_id in pending_betaal_product and user_id not in pending_betaal_image:
-                pending_betaal_image[user_id] = message.attachments[0].url
-                await message.channel.send("📸 Afbeelding ontvangen! Klik op **'Afbeelding verstuurd'** in het vorige menu.")
-            elif user_id not in pending_partner_submissions:
+            if user_id not in pending_partner_submissions:
                 pending_partner_submissions[user_id] = message.attachments[0].url
                 await message.channel.send("📸 Partner foto ontvangen! Klik op **'Foto verstuurd'**.")
 
         if message.content:
-            # Controleren of de persoon heeft gezegd dat hij betaald heeft
-            if message.content.strip().lower() == "betaald":
-                guild = bot.guilds[0] if bot.guilds else None
-                log_betaal_kanaal = guild.get_channel(CHANNEL_BETAAL_LOGS) if guild else None
-                if log_betaal_kanaal:
-                    embed_betaald = discord.Embed(
-                        title="💰 Betaling doorgegeven door Klant",
-                        description=f"**Klant:** {message.author.mention} (`{message.author.id}`)\n\n**Bericht van klant:** Betaald",
-                        color=discord.Color.gold()
-                    )
-                    await log_betaal_kanaal.send(embed=embed_betaald, view=BetaalStaffLogReviewView(message.author))
-                    await message.channel.send("✅ Bedankt! Je betaling is doorgegeven aan de staf. Zij controleren dit zo spoedig mogelijk.")
-            
-            # Betaal product tekst opvang
-            elif user_id not in pending_betaal_product and user_id not in pending_partner_messages:
-                pending_betaal_product[user_id] = message.content
-                await message.channel.send("📝 Product ontvangen! Klik nu op de knop **'Bericht indienen'** in je DM.")
-
-            # Partner tekst opvang
             if user_id in pending_partner_submissions and user_id not in pending_partner_messages:
                 pending_partner_messages[user_id] = message.content
 
     await bot.process_commands(message)
-
-
-# --- /KORTINGSCODE COMMANDO'S ---
-
-@bot.tree.command(name="createkortingscode", description="Maak een nieuwe kortingscode aan (0-90%).")
-@app_commands.describe(code="De kortingscode", korting="Kortingspercentage (tussen 0 en 90)")
-async def create_kortingscode(interaction: discord.Interaction, code: str, korting: int):
-    if interaction.user.id not in OWNER_IDS:
-        user_role_ids = [role.id for role in interaction.user.roles]
-        if ROLE_KORTING_BEHEER not in user_role_ids:
-            await interaction.response.send_message("❌ Jij hebt geen toestemming om dit commando te gebruiken.", ephemeral=True)
-            return
-
-    if not (0 <= korting <= 90):
-        await interaction.response.send_message("❌ De korting moet tussen 0 en 90 procent zijn.", ephemeral=True)
-        return
-
-    actieve_kortingscodes[code.upper()] = korting
-    await interaction.response.send_message(f"✅ Kortingscode **{code.upper()}** succesvol aangemaakt met **{korting}%** korting!", ephemeral=True)
-
-
-@bot.tree.command(name="removekortingscode", description="Verwijder een bestaande kortingscode.")
-@app_commands.describe(code="De te verwijderen kortingscode")
-async def remove_kortingscode(interaction: discord.Interaction, code: str):
-    if interaction.user.id not in OWNER_IDS:
-        user_role_ids = [role.id for role in interaction.user.roles]
-        if ROLE_KORTING_BEHEER not in user_role_ids:
-            await interaction.response.send_message("❌ Jij hebt geen toestemming om dit commando te gebruiken.", ephemeral=True)
-            return
-
-    code_upper = code.upper()
-    if code_upper in actieve_kortingscodes:
-        del actieve_kortingscodes[code_upper]
-        await interaction.response.send_message(f"✅ Kortingscode **{code_upper}** is succesvol verwijderd.", ephemeral=True)
-    else:
-        await interaction.response.send_message(f"❌ Kortingscode **{code_upper}** kon niet worden gevonden.", ephemeral=True)
-
-
-# --- /BETAALTICKET COMMANDO ---
-@bot.tree.command(name="betaalticket", description="Plaats het betaalticket paneel.")
-async def betaalticket_panel(interaction: discord.Interaction):
-    if interaction.user.id not in OWNER_IDS:
-        user_role_ids = [role.id for role in interaction.user.roles]
-        if ROLE_PARTNER_BEHEER not in user_role_ids:
-            await interaction.response.send_message("Geen toestemming om dit paneel te plaatsen.", ephemeral=True)
-            return
-
-    await interaction.response.defer(ephemeral=True)
-    embed = discord.Embed(
-        title="💳 Betaalticket Aanmaken",
-        description="Wil je een product bestellen? Klik op de knop hieronder om je betaalticket te starten via DM!",
-        color=discord.Color.blue()
-    )
-    await interaction.channel.send(embed=embed, view=BetaalStartView())
-    await interaction.followup.send("Betaalpanel geplaatst!", ephemeral=True)
 
 
 # --- /REVIEW COMMANDO ---
@@ -741,7 +424,7 @@ async def say_command(interaction: discord.Interaction, bericht: str, afbeelding
 @bot.tree.command(name="partnerpanel", description="Plaats partner paneel.")
 async def partnerpanel(interaction: discord.Interaction):
     if interaction.user.id not in OWNER_IDS:
-        if not any(r.id == ROLE_PARTNER_BEHEER for r in interaction.user.roles):
+        if not any(r.id == ROLE_ACCEPTEREN_BEHEER or r.id == ROLE_PARTNER_BEHEER for r in interaction.user.roles):
             await interaction.response.send_message("Geen toestemming.", ephemeral=True)
             return
 
