@@ -23,6 +23,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # --- CONFIGURATIE ---
 ROLE_ACCEPTEREN_BEHEER = 1556578093081305159  # Alleen deze rol mag partners accepteren & afwijzen
 ROLE_PARTNER_BEHEER = 1541819580173779026
+ROLE_PARTNER_GEACCEPTEERD = 1558829178541838396  # Rol die automatisch wordt gegeven bij acceptatie
 
 # Discord ID's die ALTIJD overal toegang toe hebben
 OWNER_IDS = [1328766617164972115, 1305271257901695048]
@@ -163,21 +164,32 @@ class PartnerReviewView(discord.ui.View):
         except Exception:
             pass
 
+        # Geef de partnerrol automatisch aan de gebruiker
+        if guild:
+            member = guild.get_member(self.member.id)
+            if member:
+                role = guild.get_role(ROLE_PARTNER_GEACCEPTEERD)
+                if role:
+                    try:
+                        await member.add_roles(role)
+                    except Exception as e:
+                        print(f"Fout bij toewijzen rol: {e}")
+
         try:
             await self.member.send("✅ Jouw partner-aanvraag is **geaccepteerd**!")
         except discord.Forbidden:
             pass
 
-        partner_kanaal = guild.get_channel(CHANNEL_PARTNER_PUBLIC)
+        partner_kanaal = guild.get_channel(CHANNEL_PARTNER_PUBLIC) if guild else None
         if partner_kanaal:
             user_partner_msg = pending_partner_messages.get(self.member.id, "Geen bericht.")
             await partner_kanaal.send(content=user_partner_msg)
 
-        log_kanaal = guild.get_channel(CHANNEL_LOGS)
+        log_kanaal = guild.get_channel(CHANNEL_LOGS) if guild else None
         if log_kanaal:
             embed_log = discord.Embed(
                 title="✅ Partner Geaccepteerd",
-                description=f"**Aanvrager:** {self.member.mention}\n**Door:** {interaction.user.mention}",
+                description=f"**Aanvrager:** {self.member.mention}\n**Door:** {interaction.user.mention}\n**Rol Toegewezen:** <@&{ROLE_PARTNER_GEACCEPTEERD}>",
                 color=discord.Color.green(),
                 timestamp=datetime.now(timezone.utc)
             )
@@ -185,7 +197,7 @@ class PartnerReviewView(discord.ui.View):
 
         pending_partner_submissions.pop(self.member.id, None)
         pending_partner_messages.pop(self.member.id, None)
-        await interaction.followup.send("Partner succesvol geaccepteerd en geplaatst in het partnerkanaal!", ephemeral=True)
+        await interaction.followup.send("Partner succesvol geaccepteerd, rol toegewezen en geplaatst in het partnerkanaal!", ephemeral=True)
 
     @discord.ui.button(label="Afkeuren", style=discord.ButtonStyle.red, custom_id="partner_deny_btn")
     async def deny_partner(self, interaction: discord.Interaction, button: discord.ui.Button):
