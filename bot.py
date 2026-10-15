@@ -1,562 +1,758 @@
+from datetime import datetime, timedelta, timezone
 import os
-import pathlib
-import discord
-from discord.ext import commands, tasks
-from discord import app_commands
-import datetime
-import asyncio
 import random
-import feedparser
+import discord
+from discord import app_commands
+from discord.ext import commands, tasks
+from dotenv import load_dotenv
+from TikTokLive import TikTokLiveClient
 
-print("Script wordt geladen...")
-
-# Probeer optioneel python-dotenv te laden (handig voor lokaal testen)
-try:
-    from dotenv import load_dotenv
-    env_path = pathlib.Path(__file__).parent / '.env'
-    load_dotenv(dotenv_path=env_path)
-except ImportError:
-    pass
-
-TOKEN = os.getenv('DISCORD_TOKEN')
+load_dotenv()
+TOKEN = os.getenv("DISCORD_TOKEN")
 
 if not TOKEN:
-    print("FOUT: Geen DISCORD_TOKEN gevonden!")
+    print("FOUT: Geen DISCORD_TOKEN gevonden in je .env bestand!")
     exit()
 
-# Definieer de Intents
 intents = discord.Intents.default()
+intents.guilds = True
 intents.members = True
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- CONFIGURATIE: ROL & KANAAL ID'S ---
-ROLE_LOWER_STAFF = 1551318319892529192          # Mute, Warn
-ROLE_HIGHER_STAFF = 1551313880494374962         # Superrol (heeft overal toegang toe)
-ROLE_PARTNER_STAFF = 1551683186629812305        # Partnerad, Eisen
-ROLE_BOTBERICHT_DM_STAFF = 1558518307949256766  # Specifieke rol voor /botbericht, /dm en /globaldm
+# --- CONFIGURATIE ---
+ROLE_ACCEPTEREN_BEHEER = 1556578093081305159  # Alleen deze rol mag partners accepteren & afwijzen
+ROLE_PARTNER_BEHEER = 1541819580173779026
+ROLE_PARTNER_GEACCEPTEERD = 1558829178541838396  # Rol die automatisch wordt gegeven bij partner acceptatie
 
-LOG_CHANNEL_ID = 1553859972100788228            # Kanaal ID voor Giveaway Logs
-TIKTOK_CHANNEL_ID = 1559164859290226788         # Kanaal ID voor TikTok Updates
+# Developer Opdracht Configuraties
+ROLE_DEV_PANEL_ALLOW = [1475901447404126340, 1545038388091166790]  # Rollen toegestaan voor /devopdracht
+ROLE_DEV_GEACCEPTEERD = 1560268453020049569                       # Rol voor geaccepteerde developers
 
-# TikTok Gegevens
-TIKTOK_USERNAME = "prizenetwork_official"
-TIKTOK_URL = f"https://www.tiktok.com/@{TIKTOK_USERNAME}"
-TIKTOK_RSS_URL = f"https://rsshub.app/tiktok/user/@{TIKTOK_USERNAME}"
+# Discord ID's die ALTIJD overal toegang toe hebben
+OWNER_IDS = [1328766617164972115, 1305271257901695048]
 
-laatst_geziene_tiktok_id = None
-PRIZE_NETWORK_BANNER = "https://i.ibb.co/bc3100dd0fb5cc6d155b5c7907b0bae8/bc3100dd0fb5cc6d155b5c7907b0bae8.jpg"
+# Rollen die toegang hebben tot het /say commando
+SAY_ROLE_IDS = [
+    1545038155508355153,
+    1545038388091166790,
+    1555907057549312060,
+    1475901447404126340
+]
 
-# Sla actieve giveaways op voor /reroll
-actieve_giveaways = {}
-giveaway_counter = 0
+# Kanalen
+CHANNEL_AANVRAAG = 1558743224384757820        # 1e indiening Partner (Beoordelingskanaal)
+CHANNEL_PARTNER_PUBLIC = 1558743246883131432  # 2e indiening Partner (Openbaar partnerkanaal)
+CHANNEL_PARTNER_PANEL = 1542844065702350878   # Waar het partnerpanel staat
+CHANNEL_TICKET = 1554523651745783940          # Waar het ticketpanel staat
+CHANNEL_LOGS = 1555929585877524500            # Logkanaal
+CHANNEL_REVIEW = 1487908079373652050          # Reviewkanaal
 
-# Controleer of de gebruiker de juiste rollen heeft
-def check_roles(interaction: discord.Interaction, allowed_role_ids: list[int]) -> bool:
-    if not interaction.guild:
-        return False
-        
-    user_role_ids = [role.id for role in interaction.user.roles]
-    if ROLE_HIGHER_STAFF in user_role_ids:
-        return True
-        
-    return any(role_id in user_role_ids for role_id in allowed_role_ids)
+# Dev Opdracht Kanalen & Categorieën
+DEV_CATEGORIES = [1505470953021505699, 1530066947037855794]
+CHANNEL_DEV_REVIEW = 1560214533900075078      # Goedkeuringskanaal voor dev opdrachten
+CHANNEL_DEV_ANNOUNCEMENT = 1560267190488277113  # Kanaal voor goedgekeurde opdrachten
+CHANNEL_DEV_PROGRESS = 1489653908413350028      # Voortgangskanaal voor developers
+
+# --- TIKTOK LIVE CONFIGURATIE ---
+TIKTOK_HANDLES = ["faab9999_", "jcd_18"]
+NOTIFICATION_CHANNEL_ID = 1555933500274642965
+
+is_live_notified = {handle: False for handle in TIKTOK_HANDLES}
+
+# Geheugen
+pending_partner_submissions = {}  # user_id -> image_url
+pending_partner_messages = {}     # user_id -> partner bericht tekst
+partner_cooldowns = {}            # user_id -> datetime van laatste aanvraag
+
+# Dev Opdrachten Geheugen
+current_user_assignment = {}     # user_id -> gekozen opdracht naam
+user_reroll_count = {}           # user_id -> aantal keren dat er is gekozen voor "andere opdracht"
+claimed_assignments = set()      # Unieke opdrachten die al geaccepteerd en geclaimd zijn
+
+EXACT_PARTNER_BERICHT = (
+    "# 👋 AVJ Online Winkel is een online winkel met verschillende Roblox producten.\n"
+    "> \n"
+    "> • What haben wij te bieden aan jou?\n"
+    "> \n"
+    "> 🟢 Heel veel gratis Roblox producten.\n"
+    "> \n"
+    "> 😉 Wij hebben heel veel keuze aan Roblox producten die je kunt kopen.\n"
+    "> \n"
+    "> 🤝 Wij helpen graag mensen die partner met ons willen worden.\n"
+    "> \n"
+    "> 🛠 Wij helpen graag mensen die problemen hebben met hun Roblox studio.\n"
+    "> \n"
+    "> 🤑 We zijn ook nog op zoek naar medewerkers die bij ons willen werken, dus misschien ben jij wel geschikt en lijkt het je leuk.\n"
+    "> \n"
+    "> ● Iedereen is van harte welkom om een kijkje te nemen in onze discord server.\n\n"
+    "> 📸 Video: https://media.discordapp.net/attachments/1499730647219175464/1499730650272497745/Schermopname_2026-05-01_131436.mp4\n\n"
+    "> 🔗 https://discord.gg/hBeUBKUAsu"
+)
 
 
-# ==========================================
-# AUTOMATISCHE TIKTOK UPDATES (ACHTERGROND)
-# ==========================================
+def get_random_dev_assignment(guild: discord.Guild, exclude_name: str = None) -> str:
+    """Haalt een willekeurige opdracht (kanaalnaam) op uit de opgegeven categorieën die nog niet bezet is."""
+    candidates = []
+    for cat_id in DEV_CATEGORIES:
+        category = guild.get_channel(cat_id)
+        if category and isinstance(category, discord.CategoryChannel):
+            for channel in category.channels:
+                clean_name = channel.name.replace("-", " ").replace("_", " ").title()
+                if clean_name not in claimed_assignments and clean_name != exclude_name:
+                    candidates.append(clean_name)
 
-@tasks.loop(minutes=5)
-async def tiktok_checker():
-    global laatst_geziene_tiktok_id
-    try:
-        kanaal = bot.get_channel(TIKTOK_CHANNEL_ID)
-        if not kanaal:
+    if not candidates:
+        # Fallback standaardvoorbeelden indien geen geschikte kanalen
+        fallback_list = ["Roblox Studio UI Design", "Custom Car Scripting", "Map Building Project", "Roblox Radio System", "Advanced Inventory Script"]
+        candidates = [f for f in fallback_list if f not in claimed_assignments and f != exclude_name]
+
+    return random.choice(candidates) if candidates else "Algemene Roblox Ontwikkeling Opdracht"
+
+
+# --- TICKET SYSTEEM VIEWS ---
+
+class TicketView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Ticket aanmaken", style=discord.ButtonStyle.primary, emoji="🎫", custom_id="create_ticket")
+    async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        guild = interaction.guild
+        category = interaction.channel.category
+
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        }
+
+        ticket_channel = await guild.create_text_channel(
+            name=f"ticket-{interaction.user.name}",
+            overwrites=overwrites,
+            category=category
+        )
+
+        await ticket_channel.send(f"Welkom {interaction.user.mention}! Een medewerker zal je zo snel mogelijk helpen. Stuur alvast je vraag of opmerking.")
+        await interaction.followup.send(f"Je ticket is aangemaakt: {ticket_channel.mention}", ephemeral=True)
+
+
+# --- DEV OPDRACHT VIEWS & MODALS ---
+
+class DevPriceModal(discord.ui.Modal, title="Prijsopgave Developer Opdracht"):
+    prijs = discord.ui.TextInput(
+        label="Hoeveel geld zou jij hiervoor willen?",
+        style=discord.TextStyle.short,
+        placeholder="Bijv: €15.00 of 1500 Robux",
+        required=True
+    )
+
+    def __init__(self, assignment_name: str):
+        super().__init__()
+        self.assignment_name = assignment_name
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        guild = interaction.client.guilds[0] if interaction.client.guilds else None
+        review_channel = guild.get_channel(CHANNEL_DEV_REVIEW) if guild else None
+
+        if not review_channel:
+            await interaction.followup.send("❌ Fout: Het reviewkanaal voor opdrachten kon niet worden gevonden.", ephemeral=True)
             return
 
-        feed = feedparser.parse(TIKTOK_RSS_URL)
-        if feed.entries:
-            meest_recente = feed.entries[0]
-            bericht_id = meest_recente.id if hasattr(meest_recente, 'id') else meest_recente.link
+        embed = discord.Embed(
+            title="🛠️ Nieuwe Developer Opdracht Aanvraag",
+            description=f"Een developer wil graag een opdracht uitvoeren voor **AVJ**.",
+            color=discord.Color.blue(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.add_field(name="👨‍💻 Developer", value=f"{interaction.user.mention} (`{interaction.user.id}`)", inline=False)
+        embed.add_field(name="📦 Gekozen Opdracht", value=f"**{self.assignment_name}**", inline=False)
+        embed.add_field(name="💰 Vraagprijs", value=f"**{self.prijs.value}**", inline=False)
+        embed.set_footer(text="AVJ Developer Beheer", icon_url=interaction.user.display_avatar.url)
 
-            if laatst_geziene_tiktok_id is None:
-                laatst_geziene_tiktok_id = bericht_id
-                return
+        await review_channel.send(
+            embed=embed,
+            view=DevReviewActionView(applicant=interaction.user, assignment=self.assignment_name, price=self.prijs.value)
+        )
 
-            if bericht_id != laatst_geziene_tiktok_id:
-                laatst_geziene_tiktok_id = bericht_id
-                
-                titel = meest_recente.title if hasattr(meest_recente, 'title') else "Nieuwe update!"
-                link = meest_recente.link
+        await interaction.followup.send("✅ Je prijsopgave is succesvol ingediend! De staf zal je aanvraag beoordelen.", ephemeral=True)
 
-                embed = discord.Embed(
-                    title="🎵 **NIEUWE TIKTOK UPDATE!**",
-                    description=f"**{titel}**\n\nBekijk de video/live via onderstaande link:\n{link}",
-                    color=discord.Color.from_rgb(254, 44, 85),
-                    timestamp=datetime.datetime.now(datetime.timezone.utc)
+
+class DevReviewActionView(discord.ui.View):
+    def __init__(self, applicant: discord.User, assignment: str, price: str):
+        super().__init__(timeout=None)
+        self.applicant = applicant
+        self.assignment = assignment
+        self.price = price
+
+    @discord.ui.button(label="Akkoord", style=discord.ButtonStyle.green, emoji="✅", custom_id="dev_review_accept")
+    async def accept_dev(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        guild = interaction.guild or (bot.guilds[0] if bot.guilds else None)
+
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except Exception:
+            pass
+
+        # 1. Rol toewijzen
+        if guild:
+            member = guild.get_member(self.applicant.id)
+            if member:
+                role = guild.get_role(ROLE_DEV_GEACCEPTEERD)
+                if role:
+                    try:
+                        await member.add_roles(role)
+                    except Exception as e:
+                        print(f"Fout bij toewijzen dev rol: {e}")
+
+        # 2. Registreer opdracht als gekozen / bezet
+        claimed_assignments.add(self.assignment)
+
+        # 3. Bericht in DM van developer
+        dm_text = (
+            f"Uw opdracht-aanvraag is **goedgekeurd**! U kunt nu aan de slag.\n\n"
+            f"Zorg ervoor dat u ten alle tijden foto's blijft sturen van uw project in het kanaal: <#{CHANNEL_DEV_PROGRESS}>.\n"
+            f"Zodra uw project klaar is kunt u <@1328766617164972115> een dm sturen. Met de informatie welke opdracht en uw download bestand van uw eindresultaat."
+        )
+        try:
+            await self.applicant.send(dm_text)
+        except discord.Forbidden:
+            pass
+
+        # 4. Automatisch aankondigingsbericht in CHANNEL_DEV_ANNOUNCEMENT
+        if guild:
+            announcement_channel = guild.get_channel(CHANNEL_DEV_ANNOUNCEMENT)
+            if announcement_channel:
+                embed_ann = discord.Embed(
+                    title="🚀 Nieuwe Developer Gestart!",
+                    description=(
+                        f"Developer {self.applicant.mention} is officieel gestart met een nieuwe opdracht voor **AVJ Online Winkel**!\n\n"
+                        f"📌 **Opdracht:** `{self.assignment}`\n"
+                        f"💼 **Status:** In Ontwikkeling\n\n"
+                        f"Veel succes met het bouwen van het project!"
+                    ),
+                    color=discord.Color.green(),
+                    timestamp=datetime.now(timezone.utc)
                 )
-                embed.set_author(name="Prize Network TikTok", icon_url="https://pngimg.com/uploads/tiktok/tiktok_PNG13.png", url=TIKTOK_URL)
-                embed.set_image(url=PRIZE_NETWORK_BANNER)
-                embed.set_footer(text="Prize Network Socials")
+                embed_ann.set_thumbnail(url=self.applicant.display_avatar.url)
+                await announcement_channel.send(content=f"🎉 {self.applicant.mention}", embed=embed_ann)
 
-                await kanaal.send(
-                    embed=embed,
-                    allowed_mentions=discord.AllowedMentions.none()
-                )
-    except Exception as e:
-        print(f"Fout bij het ophalen van TikTok updates: {e}")
+        await interaction.followup.send("✅ Developer-aanvraag goedgekeurd, rol toegewezen en aankondiging geplaatst!", ephemeral=True)
+
+    @discord.ui.button(label="Deny", style=discord.ButtonStyle.red, emoji="❌", custom_id="dev_review_deny")
+    async def deny_dev(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except Exception:
+            pass
+
+        dm_text = (
+            f"Uw aanvraag voor de opdracht **{self.assignment}** is helaas **afgekeurd**.\n\n"
+            f"Dit kan de volgende redenen hebben:\n"
+            f"1. De prijs is te hoog.\n"
+            f"2. Dit product is al in de maak.\n"
+            f"3. De vereiste kwalificaties of specificaties sluiten momenteel niet aan bij wat we zoeken."
+        )
+        try:
+            await self.applicant.send(dm_text)
+        except discord.Forbidden:
+            pass
+
+        await interaction.followup.send("❌ Developer-aanvraag afgekeurd en bericht gestuurd naar de aanvrager.", ephemeral=True)
+
+
+class DevChoiceView(discord.ui.View):
+    def __init__(self, user_id: int, current_assignment: str):
+        super().__init__(timeout=300)
+        self.user_id = user_id
+        self.current_assignment = current_assignment
+
+    @discord.ui.button(label="Akkoord gaan met opdracht", style=discord.ButtonStyle.green, emoji="✅", custom_id="dev_choice_accept")
+    async def accept_assignment(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except Exception:
+            pass
+
+        await interaction.response.send_modal(DevPriceModal(assignment_name=self.current_assignment))
+
+    @discord.ui.button(label="Maak een andere opdracht", style=discord.ButtonStyle.secondary, emoji="🔀", custom_id="dev_choice_reroll")
+    async def reroll_assignment(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+
+        current_count = user_reroll_count.get(self.user_id, 0)
+        if current_count >= 1:
+            await interaction.followup.send("⚠️ Je hebt je maximale aantal wissels (MAX 1X) al gebruikt!", ephemeral=True)
+            return
+
+        user_reroll_count[self.user_id] = current_count + 1
+
+        guild = interaction.client.guilds[0] if interaction.client.guilds else None
+        new_assignment = get_random_dev_assignment(guild, exclude_name=self.current_assignment)
+        current_user_assignment[self.user_id] = new_assignment
+
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except Exception:
+            pass
+
+        embed = discord.Embed(
+            title="🛠️ Jouw Nieuwe Developer Opdracht",
+            description=(
+                f"Je hebt gekozen voor een andere opdracht.\n\n"
+                f"📋 **Nieuwe Opdracht:**\n> **{new_assignment}**\n\n"
+                f"Ga je akkoord met deze nieuwe opdracht?"
+            ),
+            color=discord.Color.purple()
+        )
+
+        try:
+            await interaction.user.send(embed=embed, view=DevChoiceViewSingle(self.user_id, new_assignment))
+            await interaction.followup.send("Ik heb je een nieuwe opdracht gestuurd via DM!", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.followup.send("❌ Ik kon je geen DM sturen.", ephemeral=True)
+
+
+class DevChoiceViewSingle(discord.ui.View):
+    def __init__(self, user_id: int, current_assignment: str):
+        super().__init__(timeout=300)
+        self.user_id = user_id
+        self.current_assignment = current_assignment
+
+    @discord.ui.button(label="Akkoord gaan met opdracht", style=discord.ButtonStyle.green, emoji="✅", custom_id="dev_choice_single_accept")
+    async def accept_assignment(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except Exception:
+            pass
+
+        await interaction.response.send_modal(DevPriceModal(assignment_name=self.current_assignment))
+
+
+class DevStartView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Opdracht Maken voor AVJ", style=discord.ButtonStyle.primary, emoji="💼", custom_id="dev_start_btn")
+    async def start_dev(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        user_id = interaction.user.id
+        guild = interaction.guild or (bot.guilds[0] if bot.guilds else None)
+
+        assignment = get_random_dev_assignment(guild)
+        current_user_assignment[user_id] = assignment
+        user_reroll_count[user_id] = 0
+
+        embed = discord.Embed(
+            title="✨ Welkom bij het AVJ Developer Programma!",
+            description=(
+                f"Beste **{interaction.user.display_name}**,\n\n"
+                f"Fijn dat je interesse hebt om een ontwikkeling te realiseren voor **AVJ Online Winkel**!\n\n"
+                f"📋 **Geselecteerde Opdracht:**\n> **{assignment}**\n\n"
+                f"Wat wil je doen met deze opdracht?"
+            ),
+            color=discord.Color.gold()
+        )
+
+        try:
+            dm = await interaction.user.create_dm()
+            await dm.send(embed=embed, view=DevChoiceView(user_id, assignment))
+            await interaction.followup.send("Ik heb je een privébericht gestuurd met je toegewezen opdracht!", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.followup.send("❌ Ik kon je geen privébericht sturen. Zorg ervoor dat je DM's openstaan!", ephemeral=True)
+
+
+# --- PARTNER SYSTEEM VIEWS & MODALS ---
+
+class DenyReasonModal(discord.ui.Modal, title="Aanvraag Afkeuren"):
+    reden = discord.ui.TextInput(
+        label="Reden van afkeuring",
+        style=discord.TextStyle.paragraph,
+        placeholder="Geef hier de reden op...",
+        required=True
+    )
+
+    def __init__(self, member: discord.Member, original_message: discord.Message, view_instance: discord.ui.View):
+        super().__init__()
+        self.member = member
+        self.original_message = original_message
+        self.view_instance = view_instance
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        for child in self.view_instance.children:
+            child.disabled = True
+        try:
+            await self.original_message.edit(view=self.view_instance)
+        except Exception:
+            pass
+
+        try:
+            await self.member.send(f"❌ Jouw aanvraag is helaas **afgekeurd**.\n**Reden:** {self.reden.value}")
+        except discord.Forbidden:
+            pass
+
+        await interaction.followup.send(f"Aanvraag afgekeurd met reden: {self.reden.value}", ephemeral=True)
+
+
+class PartnerReviewView(discord.ui.View):
+    def __init__(self, member: discord.Member):
+        super().__init__(timeout=None)
+        self.member = member
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id in OWNER_IDS:
+            return True
+        
+        role_ids = [role.id for role in interaction.user.roles]
+        if ROLE_ACCEPTEREN_BEHEER not in role_ids:
+            await interaction.response.send_message("❌ Jij hebt geen toestemming om deze partneraanvraag te beoordelen.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Accepteren", style=discord.ButtonStyle.green, custom_id="partner_accept_btn")
+    async def accept_partner(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        guild = interaction.guild or (bot.guilds[0] if bot.guilds else None)
+
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except Exception:
+            pass
+
+        if guild:
+            member = guild.get_member(self.member.id)
+            if member:
+                role = guild.get_role(ROLE_PARTNER_GEACCEPTEERD)
+                if role:
+                    try:
+                        await member.add_roles(role)
+                    except Exception as e:
+                        print(f"Fout bij toewijzen rol: {e}")
+
+        try:
+            await self.member.send("✅ Jouw partner-aanvraag is **geaccepteerd**!")
+        except discord.Forbidden:
+            pass
+
+        partner_kanaal = guild.get_channel(CHANNEL_PARTNER_PUBLIC) if guild else None
+        if partner_kanaal:
+            user_partner_msg = pending_partner_messages.get(self.member.id, "Geen bericht.")
+            await partner_kanaal.send(content=user_partner_msg)
+
+        log_kanaal = guild.get_channel(CHANNEL_LOGS) if guild else None
+        if log_kanaal:
+            embed_log = discord.Embed(
+                title="✅ Partner Geaccepteerd",
+                description=f"**Aanvrager:** {self.member.mention}\n**Door:** {interaction.user.mention}\n**Rol Toegewezen:** <@&{ROLE_PARTNER_GEACCEPTEERD}>",
+                color=discord.Color.green(),
+                timestamp=datetime.now(timezone.utc)
+            )
+            await log_kanaal.send(embed=embed_log)
+
+        pending_partner_submissions.pop(self.member.id, None)
+        pending_partner_messages.pop(self.member.id, None)
+        await interaction.followup.send("Partner succesvol geaccepteerd, rol toegewezen en geplaatst in het partnerkanaal!", ephemeral=True)
+
+    @discord.ui.button(label="Afkeuren", style=discord.ButtonStyle.red, custom_id="partner_deny_btn")
+    async def deny_partner(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(DenyReasonModal(self.member, interaction.message, self))
+
+
+class PartnerMsgSubmitView(discord.ui.View):
+    def __init__(self, user_id: int):
+        super().__init__(timeout=300)
+        self.user_id = user_id
+
+    @discord.ui.button(label="Partner bericht versturen", style=discord.ButtonStyle.green, emoji="📤", custom_id="partner_msg_done_btn")
+    async def msg_done(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        user_partner_msg = pending_partner_messages.get(self.user_id)
+        if not user_partner_msg:
+            await interaction.followup.send("Geen partner bericht ingevoerd!", ephemeral=True)
+            return
+
+        guild = bot.guilds[0] if bot.guilds else None
+        aanvraag_kanaal = guild.get_channel(CHANNEL_AANVRAAG) if guild else None
+        if not aanvraag_kanaal:
+            await interaction.followup.send("Aanvraagkanaal niet gevonden.", ephemeral=True)
+            return
+
+        image_url = pending_partner_submissions.get(self.user_id)
+        embed = discord.Embed(title="🤝 Nieuwe Partner Aanvraag", description=f"**Gebruiker:** {interaction.user.mention}\n\n{user_partner_msg}", color=discord.Color.blue())
+        if image_url:
+            embed.set_image(url=image_url)
+
+        await aanvraag_kanaal.send(embed=embed, view=PartnerReviewView(interaction.user))
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except Exception:
+            pass
+        await interaction.followup.send("Aanvraag ingediend!", ephemeral=True)
+
+
+class PartnerImageView(discord.ui.View):
+    def __init__(self, user_id: int):
+        super().__init__(timeout=300)
+        self.user_id = user_id
+
+    @discord.ui.button(label="Foto verstuurd", style=discord.ButtonStyle.blurple, emoji="📸", custom_id="partner_image_sent_btn")
+    async def image_sent(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except Exception:
+            pass
+        await interaction.user.send(content="Stuur nu je partner bericht in deze DM:", view=PartnerMsgSubmitView(self.user_id))
+
+
+class PartnerSendMsgView(discord.ui.View):
+    def __init__(self, user_id: int):
+        super().__init__(timeout=300)
+        self.user_id = user_id
+
+    @discord.ui.button(label="Bericht verstuurd", style=discord.ButtonStyle.green, emoji="📤", custom_id="partner_msg_sent_btn")
+    async def msg_sent(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except Exception:
+            pass
+        await interaction.user.send(content="Stuur nu een screenshot als bewijs:", view=PartnerImageView(self.user_id))
+
+
+class MemberCheckView(discord.ui.View):
+    def __init__(self, user_id: int):
+        super().__init__(timeout=300)
+        self.user_id = user_id
+
+    @discord.ui.button(label="Ja, ik voldoe hieraan (15+ leden)", style=discord.ButtonStyle.green, custom_id="member_check_yes")
+    async def yes_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except Exception:
+            pass
+        await interaction.user.send(content=f"Plaats dit bericht:\n\n{EXACT_PARTNER_BERICHT}", view=PartnerSendMsgView(self.user_id))
+        await interaction.followup.send("DM verzonden!", ephemeral=True)
+
+    @discord.ui.button(label="Nee", style=discord.ButtonStyle.red, custom_id="member_check_no")
+    async def no_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except Exception:
+            pass
+        await interaction.followup.send("Geannuleerd.", ephemeral=True)
+
+
+class PartnerStartView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Start Partner Aanvraag", style=discord.ButtonStyle.green, custom_id="partner_start_btn")
+    async def start_partner_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        user_id = interaction.user.id
+        now = datetime.now(timezone.utc)
+
+        if user_id in partner_cooldowns and now - partner_cooldowns[user_id] < timedelta(hours=12):
+            await interaction.followup.send("⏳ Je kunt dit maar 1 keer per 12 uur doen.", ephemeral=True)
+            return
+
+        partner_cooldowns[user_id] = now
+        try:
+            dm = await interaction.user.create_dm()
+            await dm.send("Voldoet jouw server aan minimaal 15 leden?", view=MemberCheckView(user_id))
+            await interaction.followup.send("Check je DM!", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.followup.send("❌ Kan geen DM sturen.", ephemeral=True)
+
+
+# --- BACKGROUND TIKTOK LOOP ---
+@tasks.loop(seconds=30)
+async def check_tiktok_live():
+    global is_live_notified
+    for handle in TIKTOK_HANDLES:
+        try:
+            client = TikTokLiveClient(unique_id=handle)
+            is_live = await client.is_live()
+            if is_live and not is_live_notified[handle]:
+                is_live_notified[handle] = True
+                channel = bot.get_channel(NOTIFICATION_CHANNEL_ID)
+                if channel:
+                    await channel.send(f"Deze persoon is live! https://www.tiktok.com/@{handle}/live")
+            elif not is_live:
+                is_live_notified[handle] = False
+        except Exception as e:
+            print(f"TikTok check fout voor {handle}: {e}")
+
+@check_tiktok_live.before_loop
+async def before_check_tiktok_live():
+    await bot.wait_until_ready()
 
 
 @bot.event
 async def on_ready():
-    print(f'Bot is succesvol ingelogd als {bot.user}!')
-    if not tiktok_checker.is_running():
-        tiktok_checker.start()
+    print(f"Ingelogd als {bot.user.name} (ID: {bot.user.id})")
+    if not check_tiktok_live.is_running():
+        check_tiktok_live.start()
+
     try:
         synced = await bot.tree.sync()
-        print(f"Gesynchroniseerd: {len(synced)} slash commands globaal.")
+        print(f"Gesynchroniseerd: {len(synced)} commando('s).")
     except Exception as e:
-        print(f"Fout bij synchroniseren van commands: {e}")
+        print(f"Sync fout: {e}")
 
-
-# ==========================================
-# 1. MODERATIE COMMANDS
-# ==========================================
-
-@bot.tree.command(name="warn", description="Geef een officiële waarschuwing aan een lid.")
-async def warn(interaction: discord.Interaction, lid: discord.Member, reden: str):
-    if not check_roles(interaction, [ROLE_LOWER_STAFF, ROLE_HIGHER_STAFF]):
-        return await interaction.response.send_message("❌ Je hebt geen rechten voor dit commando.", ephemeral=True)
-    
-    embed = discord.Embed(
-        title="⚠️ OFFICIËLE WAARSCHUWING",
-        description=f"Er is een officiële waarschuwing uitgedeeld aan {lid.mention}.",
-        color=discord.Color.from_rgb(255, 170, 0),
-        timestamp=datetime.datetime.now(datetime.timezone.utc)
-    )
-    embed.add_field(name="👤 Gebruiker", value=f"{lid.mention} (`{lid.id}`)", inline=True)
-    embed.add_field(name="🛡️ Moderator", value=f"{interaction.user.mention}", inline=True)
-    embed.add_field(name="📝 Reden", value=f"```\n{reden}\n```", inline=False)
-    embed.set_thumbnail(url=lid.display_avatar.url)
-    embed.set_footer(text="Prize Network Moderatie", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
-    
-    await interaction.response.send_message(embed=embed)
-
-
-@bot.tree.command(name="mute", description="Tijdelijke mute (timeout) voor een lid.")
-async def mute(interaction: discord.Interaction, lid: discord.Member, minuten: int, reden: str):
-    if not check_roles(interaction, [ROLE_LOWER_STAFF, ROLE_HIGHER_STAFF]):
-        return await interaction.response.send_message("❌ Je hebt geen rechten voor dit commando.", ephemeral=True)
-    
-    duur = datetime.timedelta(minutes=minuten)
-    await lid.timeout(duur, reason=reden)
-    
-    embed = discord.Embed(
-        title="🤫 GEBRUIKER GEMUTED",
-        description=f"{lid.mention} is tijdelijk stilgezet.",
-        color=discord.Color.from_rgb(230, 126, 34),
-        timestamp=datetime.datetime.now(datetime.timezone.utc)
-    )
-    embed.add_field(name="👤 Gebruiker", value=f"{lid.mention} (`{lid.id}`)", inline=True)
-    embed.add_field(name="⏱️ Duur", value=f"**{minuten} minuten**", inline=True)
-    embed.add_field(name="🛡️ Moderator", value=f"{interaction.user.mention}", inline=True)
-    embed.add_field(name="📝 Reden", value=f"```\n{reden}\n```", inline=False)
-    embed.set_thumbnail(url=lid.display_avatar.url)
-    embed.set_footer(text="Prize Network Moderatie", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
-    
-    await interaction.response.send_message(embed=embed)
-
-
-@bot.tree.command(name="kick", description="Kick een lid uit de server.")
-async def kick(interaction: discord.Interaction, lid: discord.Member, reden: str = "Geen reden opgegeven"):
-    if not check_roles(interaction, [ROLE_HIGHER_STAFF]):
-        return await interaction.response.send_message("❌ Je hebt geen rechten voor dit commando.", ephemeral=True)
-    
-    await lid.kick(reason=reden)
-    
-    embed = discord.Embed(
-        title="👢 GEBRUIKER GEKICKT",
-        description=f"{lid.mention} is verwijderd uit de server.",
-        color=discord.Color.from_rgb(231, 76, 60),
-        timestamp=datetime.datetime.now(datetime.timezone.utc)
-    )
-    embed.add_field(name="👤 Gebruiker", value=f"**{lid.display_name}** (`{lid.id}`)", inline=True)
-    embed.add_field(name="🛡️ Moderator", value=f"{interaction.user.mention}", inline=True)
-    embed.add_field(name="📝 Reden", value=f"```\n{reden}\n```", inline=False)
-    embed.set_footer(text="Prize Network Moderatie", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
-
-    await interaction.response.send_message(embed=embed)
-
-
-@bot.tree.command(name="ban", description="Ban een lid uit de server.")
-async def ban(interaction: discord.Interaction, lid: discord.Member, reden: str = "Geen reden opgegeven"):
-    if not check_roles(interaction, [ROLE_HIGHER_STAFF]):
-        return await interaction.response.send_message("❌ Je hebt geen rechten voor dit commando.", ephemeral=True)
-    
-    await lid.ban(reason=reden)
-    
-    embed = discord.Embed(
-        title="🔨 GEBRUIKER VERBANNEN",
-        description=f"**{lid.display_name}** is permanent verbannen uit de server.",
-        color=discord.Color.from_rgb(155, 89, 182),
-        timestamp=datetime.datetime.now(datetime.timezone.utc)
-    )
-    embed.add_field(name="👤 Gebruiker", value=f"**{lid.display_name}** (`{lid.id}`)", inline=True)
-    embed.add_field(name="🛡️ Moderator", value=f"{interaction.user.mention}", inline=True)
-    embed.add_field(name="📝 Reden", value=f"```\n{reden}\n```", inline=False)
-    embed.set_footer(text="Prize Network Moderatie", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
-
-    await interaction.response.send_message(embed=embed)
-
-
-# ==========================================
-# 2. BOTBERICHT, DM & GLOBALDM COMMANDS
-# ==========================================
-
-@bot.tree.command(name="botbericht", description="Stuur een gewoon bericht namens de bot.")
-async def botbericht(interaction: discord.Interaction, bericht: str, afbeelding: discord.Attachment = None):
-    if not check_roles(interaction, [ROLE_BOTBERICHT_DM_STAFF, ROLE_HIGHER_STAFF]):
-        return await interaction.response.send_message("❌ Je hebt geen rechten voor dit commando.", ephemeral=True)
-    
-    if interaction.channel:
-        if afbeelding:
-            file = await afbeelding.to_file()
-            await interaction.channel.send(content=bericht, file=file)
-        else:
-            await interaction.channel.send(content=bericht)
-            
-    await interaction.response.send_message("✨ Bericht succesvol geplaatst!", ephemeral=True)
-
-
-@bot.tree.command(name="dm", description="Stuur een privébericht naar een gebruiker.")
-async def dm(interaction: discord.Interaction, gebruiker: discord.User, bericht: str, afbeelding: discord.Attachment = None):
-    if not check_roles(interaction, [ROLE_BOTBERICHT_DM_STAFF, ROLE_HIGHER_STAFF]):
-        return await interaction.response.send_message("❌ Je hebt geen rechten voor dit commando.", ephemeral=True)
-    
-    try:
-        embed = discord.Embed(
-            title="📩 **BERICHT VAN PRIZE NETWORK**",
-            description=bericht,
-            color=discord.Color.from_rgb(155, 89, 182),
-            timestamp=datetime.datetime.now(datetime.timezone.utc)
-        )
-        if afbeelding:
-            embed.set_image(url=afbeelding.url)
-            
-        embed.set_footer(text="Verzonden door de staff van Prize Network", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
-
-        await gebruiker.send(embed=embed)
-        await interaction.response.send_message(f"✅ DM succesvol verzonden naar {gebruiker.mention}.", ephemeral=True)
-    except discord.Forbidden:
-        await interaction.response.send_message("❌ Kon de DM niet versturen. De gebruiker heeft hun DM's waarschijnlijk uitstaan.", ephemeral=True)
-
-
-@bot.tree.command(name="globaldm", description="Stuur een privébericht naar ALLE leden in de server.")
-async def globaldm(interaction: discord.Interaction, bericht: str, afbeelding: discord.Attachment = None):
-    if not check_roles(interaction, [ROLE_BOTBERICHT_DM_STAFF, ROLE_HIGHER_STAFF]):
-        return await interaction.response.send_message("❌ Je hebt geen rechten voor dit commando.", ephemeral=True)
-
-    if not interaction.guild:
-        return await interaction.response.send_message("❌ Dit commando kan alleen in een server gebruikt worden.", ephemeral=True)
-
-    await interaction.response.send_message("🚀 **Global DM is op de achtergrond gestart!** Je krijgt een seintje zodra het klaar is.", ephemeral=True)
-
-    embed = discord.Embed(
-        title="📢 **MEDEDELING VAN PRIZE NETWORK**",
-        description=bericht,
-        color=discord.Color.from_rgb(52, 152, 219),
-        timestamp=datetime.datetime.now(datetime.timezone.utc)
-    )
-    if afbeelding:
-        embed.set_image(url=afbeelding.url)
-    else:
-        embed.set_image(url=PRIZE_NETWORK_BANNER)
-        
-    embed.set_footer(text="Prize Network Community", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
-
-    async def verstuur_achtergrond():
-        succes = 0
-        mislukt = 0
-        
-        for member in interaction.guild.members:
-            if member.bot:
-                continue
-            try:
-                await member.send(embed=embed)
-                succes += 1
-                await asyncio.sleep(0.05)
-            except (discord.Forbidden, discord.HTTPException):
-                mislukt += 1
-
-        if interaction.channel:
-            await interaction.channel.send(
-                f"✅ **Global DM Voltooid door {interaction.user.mention}!**\n"
-                f"• 📤 Succesvol: **{succes}** leden\n"
-                f"• ❌ Mislukt (DM's uit): **{mislukt}** leden"
-            )
-
-    asyncio.create_task(verstuur_achtergrond())
-
-
-# ==========================================
-# 3. LUXE GIVEAWAY SYSTEM + LOGGING & REROLL
-# ==========================================
-
-class GiveawayView(discord.ui.View):
-    def __init__(self, embed: discord.Embed, participants_list: list):
-        super().__init__(timeout=None)
-        self.participants = participants_list
-        self.embed = embed
-
-    @discord.ui.button(label="Meedoen", style=discord.ButtonStyle.success, emoji="🎉", custom_id="giveaway_join")
-    async def join_giveaway(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user in self.participants:
-            self.participants.remove(interaction.user)
-            await interaction.response.send_message("❌ Je bent uit de giveaway gestapt.", ephemeral=True)
-        else:
-            self.participants.append(interaction.user)
-            await interaction.response.send_message("🎉 Je doet nu succesvol mee aan de giveaway!", ephemeral=True)
-
-        for index, field in enumerate(self.embed.fields):
-            if "Deelnemers" in field.name:
-                self.embed.set_field_at(index, name="👥 Deelnemers", value=f"```\n{len(self.participants)} deelnemers\n```", inline=True)
+    ticket_kanaal = bot.get_channel(CHANNEL_TICKET)
+    if ticket_kanaal:
+        has_view = False
+        async for message in ticket_kanaal.history(limit=5):
+            if message.author == bot.user:
+                has_view = True
                 break
-        
-        if interaction.message:
-            try:
-                await interaction.message.edit(embed=self.embed)
-            except discord.HTTPException:
-                pass
-
-    @discord.ui.button(label="Aantal Deelnemers", style=discord.ButtonStyle.secondary, emoji="📊", custom_id="giveaway_count")
-    async def count_participants(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(f"📊 Er doen op dit moment **{len(self.participants)}** mensen mee aan deze giveaway!", ephemeral=True)
+        if not has_view:
+            await ticket_kanaal.send("**Ondersteuning & Tickets**\nKlik op de knop om een ticket te openen.", view=TicketView())
 
 
-@bot.tree.command(name="giveaway", description="Start een luxe giveaway.")
-async def giveaway(
-    interaction: discord.Interaction, 
-    prijs: str, 
-    aantal_winnaars: int, 
-    duur_minuten: int, 
-    tag_rol: discord.Role = None
-):
-    global giveaway_counter
-    if not check_roles(interaction, [ROLE_HIGHER_STAFF]):
-        return await interaction.response.send_message("❌ Je hebt geen rechten voor dit commando.", ephemeral=True)
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
 
-    if not interaction.channel:
-        return await interaction.response.send_message("❌ Dit commando werkt alleen in een kanaal.", ephemeral=True)
+    # DM afhandeling voor Partners
+    if isinstance(message.channel, discord.DMChannel):
+        user_id = message.author.id
 
-    giveaway_counter += 1
-    giv_id = giveaway_counter
+        if message.attachments:
+            if user_id not in pending_partner_submissions:
+                pending_partner_submissions[user_id] = message.attachments[0].url
+                await message.channel.send("📸 Partner foto ontvangen! Klik op **'Foto verstuurd'**.")
 
-    eind_tijd = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=duur_minuten)
-    timestamp = f"<t:{int(eind_tijd.timestamp())}:R>"
-    exacte_tijd = f"<t:{int(eind_tijd.timestamp())}:f>"
+        if message.content:
+            if user_id in pending_partner_submissions and user_id not in pending_partner_messages:
+                pending_partner_messages[user_id] = message.content
 
-    embed = discord.Embed(
-        title=f"🎉 **GIVEAWAY: {prijs.upper()}** 🎉",
-        description="Klik op de groene knop **'Meedoen 🎉'** hieronder om kans te maken!",
-        color=discord.Color.from_rgb(88, 101, 242)
-    )
-    
-    embed.set_author(name=f"Giveaway #{giv_id}")
-
-    embed.add_field(name="🏆 Prijs", value=f"```\n{prijs}\n```", inline=True)
-    embed.add_field(name="👑 Winnaar(s)", value=f"```\n{aantal_winnaars} winnaar(s)\n```", inline=True)
-    embed.add_field(name="👥 Deelnemers", value="```\n0 deelnemers\n```", inline=True)
-    embed.add_field(name="⏳ Resterende Tijd", value=f"Eindigt {timestamp}\n({exacte_tijd})", inline=False)
-    embed.add_field(name="🎙️ Gehost door", value=interaction.user.mention, inline=False)
-    
-    embed.set_image(url=PRIZE_NETWORK_BANNER)
-    embed.set_footer(text=f"Prize Network • ID: {giv_id} • Veel succes!", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
-
-    content = tag_rol.mention if tag_rol else None
-    
-    participants_list = []
-    actieve_giveaways[giv_id] = {
-        "prijs": prijs,
-        "participants": participants_list
-    }
-
-    view = GiveawayView(embed=embed, participants_list=participants_list)
-
-    await interaction.response.send_message(f"✅ Giveaway **#{giv_id}** succesvol gestart!", ephemeral=True)
-    message = await interaction.channel.send(content=content, embed=embed, view=view)
-
-    # --- LOG: GIVEAWAY GESTART ---
-    log_kanaal = bot.get_channel(LOG_CHANNEL_ID)
-    if log_kanaal:
-        start_log_embed = discord.Embed(
-            title=f"📋 **LOG: GIVEAWAY #{giv_id} GESTART**",
-            color=discord.Color.from_rgb(52, 152, 219),
-            timestamp=datetime.datetime.now(datetime.timezone.utc)
-        )
-        start_log_embed.add_field(name="🏆 Prijs", value=f"**{prijs}**", inline=True)
-        start_log_embed.add_field(name="👑 Winnaar(s)", value=f"**{aantal_winnaars}**", inline=True)
-        start_log_embed.add_field(name="⏱️ Duur", value=f"**{duur_minuten} minuten**", inline=True)
-        start_log_embed.add_field(name="🎙️ Host", value=interaction.user.mention, inline=True)
-        start_log_embed.add_field(name="📍 Kanaal", value=interaction.channel.mention, inline=True)
-        start_log_embed.add_field(name="🔗 Bericht Link", value=f"[Ga naar Giveaway]({message.jump_url})", inline=False)
-        start_log_embed.set_footer(text=f"Prize Network Giveaway Logs • ID: {giv_id}")
-        await log_kanaal.send(embed=start_log_embed)
-
-    await asyncio.sleep(duur_minuten * 60)
-
-    for child in view.children:
-        child.disabled = True
-
-    if not participants_list:
-        eind_embed = discord.Embed(
-            title=f"🛑 **GIVEAWAY #{giv_id} AFGELOPEN**",
-            description=f"De giveaway voor **{prijs}** is afgelopen, maar er waren helaas geen deelnemers!",
-            color=discord.Color.from_rgb(231, 76, 60)
-        )
-        eind_embed.set_author(name=f"Giveaway #{giv_id}")
-        eind_embed.set_image(url=PRIZE_NETWORK_BANNER)
-        try:
-            await message.edit(embed=eind_embed, view=view)
-        except discord.HTTPException:
-            pass
-
-        if log_kanaal:
-            eind_log_embed = discord.Embed(
-                title=f"📋 **LOG: GIVEAWAY #{giv_id} AFGELOPEN (GEEN DEELNEMERS)**",
-                color=discord.Color.from_rgb(231, 76, 60),
-                timestamp=datetime.datetime.now(datetime.timezone.utc)
-            )
-            eind_log_embed.add_field(name="🏆 Prijs", value=f"**{prijs}**", inline=True)
-            eind_log_embed.add_field(name="🔗 Bericht Link", value=f"[Ga naar Giveaway]({message.jump_url})", inline=False)
-            await log_kanaal.send(embed=eind_log_embed)
-    else:
-        winnaars = random.sample(participants_list, min(len(participants_list), aantal_winnaars))
-        winnaars_mentions = ", ".join([w.mention for w in winnaars])
-        
-        eind_embed = discord.Embed(
-            title=f"✨ **GIVEAWAY WINNAAR(S) (#{giv_id})** ✨",
-            description=f"De giveaway voor **{prijs}** is officieel afgelopen!",
-            color=discord.Color.from_rgb(255, 215, 0)
-        )
-        eind_embed.set_author(name=f"Giveaway #{giv_id}")
-        eind_embed.add_field(name="🎁 Gewonnen Prijs", value=f"**{prijs}**", inline=False)
-        eind_embed.add_field(name="🎉 Winnaar(s)", value=winnaars_mentions, inline=False)
-        eind_embed.add_field(name="👥 Totaal Aantal Deelnemers", value=f"**{len(participants_list)}**", inline=False)
-        eind_embed.set_image(url=PRIZE_NETWORK_BANNER)
-        eind_embed.set_footer(text="Prize Network • Open een ticket om je prijs te claimen!", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
-
-        try:
-            await message.edit(embed=eind_embed, view=view)
-        except discord.HTTPException:
-            pass
-            
-        await interaction.channel.send(content=f"🎊 Gefeliciteerd {winnaars_mentions}! Je hebt **{prijs}** gewonnen (Giveaway **#{giv_id}**).", embed=eind_embed)
-
-        if log_kanaal:
-            eind_log_embed = discord.Embed(
-                title=f"📋 **LOG: GIVEAWAY #{giv_id} AFGELOPEN**",
-                color=discord.Color.from_rgb(46, 204, 113),
-                timestamp=datetime.datetime.now(datetime.timezone.utc)
-            )
-            eind_log_embed.add_field(name="🏆 Prijs", value=f"**{prijs}**", inline=True)
-            eind_log_embed.add_field(name="🎉 Winnaar(s)", value=winnaars_mentions, inline=True)
-            eind_log_embed.add_field(name="👥 Deelnemers", value=f"**{len(participants_list)}**", inline=True)
-            eind_log_embed.add_field(name="🎙️ Host", value=interaction.user.mention, inline=True)
-            eind_log_embed.add_field(name="🔗 Bericht Link", value=f"[Ga naar Giveaway]({message.jump_url})", inline=False)
-            eind_log_embed.set_footer(text=f"Prize Network Giveaway Logs • ID: {giv_id}")
-            await log_kanaal.send(embed=eind_log_embed)
+    await bot.process_commands(message)
 
 
-@bot.tree.command(name="reroll", description="Kies nieuwe winnaars voor een giveaway.")
-@app_commands.describe(nummer="Het giveaway nummer", hoeveel="Aantal nieuwe winnaars")
-async def reroll(interaction: discord.Interaction, nummer: int, hoeveel: int):
-    if not check_roles(interaction, [ROLE_HIGHER_STAFF]):
-        return await interaction.response.send_message("❌ Je hebt geen rechten voor dit commando.", ephemeral=True)
+# --- /DEVOPDRACHT COMMANDO ---
+@bot.tree.command(name="devopdracht", description="Plaats het paneel voor developer opdrachten.")
+async def devopdracht_panel(interaction: discord.Interaction):
+    if interaction.user.id not in OWNER_IDS:
+        user_roles = [r.id for r in interaction.user.roles]
+        if not any(rid in user_roles for rid in ROLE_DEV_PANEL_ALLOW):
+            await interaction.response.send_message("❌ Jij hebt geen toestemming om dit paneel te plaatsen.", ephemeral=True)
+            return
 
-    if nummer not in actieve_giveaways:
-        return await interaction.response.send_message(f"❌ Kan geen actieve of opgeslagen giveaway vinden met nummer **{nummer}**.", ephemeral=True)
-
-    giv_data = actieve_giveaways[nummer]
-    participants = giv_data["participants"]
-    prijs = giv_data["prijs"]
-
-    if not participants:
-        return await interaction.response.send_message(f"❌ Er waren geen deelnemers bij giveaway **{nummer}** om te rerollen.", ephemeral=True)
-
-    nieuwe_winnaars = random.sample(participants, min(len(participants), hoeveel))
-    winnaars_mentions = ", ".join([w.mention for w in nieuwe_winnaars])
+    await interaction.response.defer(ephemeral=True)
 
     embed = discord.Embed(
-        title=f"🔄 **REROLL WINNAAR(S)**",
-        description=f"Er is een nieuwe winnaar gekozen voor **{prijs}**!",
-        color=discord.Color.from_rgb(241, 196, 15),
-        timestamp=datetime.datetime.now(datetime.timezone.utc)
-    )
-    embed.set_author(name=f"Giveaway #{nummer}")
-    embed.add_field(name="🎁 Prijs", value=f"**{prijs}**", inline=False)
-    embed.add_field(name="🎉 Nieuwe Winnaar(s)", value=winnaars_mentions, inline=False)
-
-    # 1. Stuur een onzichtbare bevestiging naar de moderator
-    await interaction.response.send_message("✅ Reroll succesvol uitgevoerd!", ephemeral=True)
-
-    # 2. Stuur het schone bericht los in het kanaal (zonder bovenschrift en zonder naam in footer)
-    if interaction.channel:
-        await interaction.channel.send(content=f"🎊 Nieuwe winnaar(s) voor giveaway **#{nummer}**: {winnaars_mentions}!", embed=embed)
-
-
-# ==========================================
-# 4. PARTNER COMMANDS
-# ==========================================
-
-@bot.tree.command(name="partnerad", description="Plaats de officiële Prize Network partner advertentie.")
-async def partnerad(interaction: discord.Interaction):
-    if not check_roles(interaction, [ROLE_PARTNER_STAFF, ROLE_HIGHER_STAFF]):
-        return await interaction.response.send_message("❌ Je hebt geen rechten voor dit commando.", ephemeral=True)
-
-    bericht_tekst = (
-        "# PRIZE NETWORK\n\n"
-        "Ben jij op zoek naar een actieve en gezellige Discord-server?\n\n"
-        "Welkom bij **Prize Network**!\n\n"
-        " • Regelmatige giveaways • Leuke events • Mooie prijzen • Actieve community • Nieuwe partners en samenwerkingen\n\n"
-        "Join Prize Network en maak kans op leuke prijzen!\n\n"
-        " • https://discord.gg/pW8WmhJMtJ\n\n"
-        "**PRIZE NETWORK**\n"
-        "Samen groeien, samen winnen."
-    )
-    
-    await interaction.response.send_message(bericht_tekst)
-
-
-@bot.tree.command(name="eisen", description="Toon de officiële partner eisen.")
-async def eisen(interaction: discord.Interaction):
-    if not check_roles(interaction, [ROLE_PARTNER_STAFF, ROLE_HIGHER_STAFF]):
-        return await interaction.response.send_message("❌ Je hebt geen rechten voor dit commando.", ephemeral=True)
-
-    embed = discord.Embed(
-        title="🤝 **PARTNER EISEN — PRIZE NETWORK**",
-        description="Om een officiële samenwerking of partnerschap aan te gaan met **Prize Network**, dient jouw Discord-server aan de onderstaande voorwaarden te voldoen:",
-        color=discord.Color.from_rgb(52, 152, 219)
-    )
-    
-    embed.add_field(
-        name="📌 Voorwaarden & Eisen",
-        value=(
-            "• 👥 **Minimaal 100+ leden** *(exclusief bots)*\n"
-            "• 💬 **Actieve Community** & gezonde dagelijkse chat\n"
-            "• 🛡️ **Veilige Omgeving** *(geen NSFW of illegale content)*\n"
-            "• 📢 **Partnerkanaal** *(een net en overzichtelijk kanaal voor partner-ads)*\n"
-            "• 🔔 **everyone ping** *(1 ping per partner-ad toegestaan, in overleg)*"
+        title="💼 AVJ Developer Opdrachten",
+        description=(
+            "Ben jij een gedreven ontwikkelaar en wil je graag opdrachten uitvoeren voor **AVJ Online Winkel**?\n\n"
+            "Via ons automatische opdrachtsysteem kun je direct een uitdagend project toegewezen krijgen en je vraagprijs indienen bij ons beheer team.\n\n"
+            "✨ **Hoe werkt het?**\n"
+            "1️⃣ Klik op de knop hieronder om je aanvraag in te starten via privébericht (DM).\n"
+            "2️⃣ Bekijk de toegewezen opdracht of kies éénmalig voor een alternatieve opdracht.\n"
+            "3️⃣ Geef je gewenste vergoeding op.\n"
+            "4️⃣ Na goedkeuring door onze staf ontvang je direct toegang en kun je aan de slag!\n\n"
+            "Klik op de knop hieronder om jouw opdracht te starten!"
         ),
-        inline=False
+        color=discord.Color.blue()
     )
-    
-    embed.set_image(url=PRIZE_NETWORK_BANNER)
-    embed.set_footer(text="Prize Network Partnerships", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
+    embed.set_footer(text="AVJ Development Management", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
 
-    await interaction.response.send_message(embed=embed)
+    await interaction.channel.send(embed=embed, view=DevStartView())
+    await interaction.followup.send("✅ Developer opdrachten paneel succesvol geplaatst!", ephemeral=True)
 
 
-# Start de bot
+# --- /REVIEW COMMANDO ---
+@bot.tree.command(name="review", description="Geef een review over iemand.")
+@app_commands.describe(naam="Naam", sterren="Sterren 1-5", tips_of_uitleg="Uitleg")
+@app_commands.choices(sterren=[
+    app_commands.Choice(name="⭐ 1 Ster", value=1),
+    app_commands.Choice(name="⭐⭐ 2 Sterren", value=2),
+    app_commands.Choice(name="⭐⭐⭐ 3 Sterren", value=3),
+    app_commands.Choice(name="⭐⭐⭐⭐ 4 Sterren", value=4),
+    app_commands.Choice(name="⭐⭐⭐⭐⭐ 5 Sterren", value=5)
+])
+async def review_command(interaction: discord.Interaction, naam: str, sterren: int, tips_of_uitleg: str):
+    await interaction.response.defer(ephemeral=True)
+    guild = interaction.guild
+    review_kanaal = guild.get_channel(CHANNEL_REVIEW) if guild else None
+    if not review_kanaal:
+        await interaction.followup.send("Review kanaal niet gevonden.", ephemeral=True)
+        return
+
+    embed = discord.Embed(title="🌟 Nieuwe Review", color=discord.Color.gold(), timestamp=datetime.now(timezone.utc))
+    embed.add_field(name="Service", value=naam, inline=False)
+    embed.add_field(name="Beoordeling", value="⭐" * sterren, inline=False)
+    embed.add_field(name="Uitleg", value=tips_of_uitleg, inline=False)
+    await review_kanaal.send(embed=embed)
+    await interaction.followup.send("Review geplaatst!", ephemeral=True)
+
+
+# --- /SAY COMMANDO ---
+@bot.tree.command(name="say", description="Laat de bot een bericht sturen.")
+@app_commands.describe(bericht="Bericht", afbeelding="Optionele afbeelding")
+async def say_command(interaction: discord.Interaction, bericht: str, afbeelding: discord.Attachment = None):
+    if interaction.user.id not in OWNER_IDS:
+        if not any(r.id in SAY_ROLE_IDS for r in interaction.user.roles):
+            await interaction.response.send_message("Geen toestemming.", ephemeral=True)
+            return
+
+    file = await afbeelding.to_file() if afbeelding else None
+    await interaction.channel.send(content=bericht, file=file)
+    await interaction.response.send_message("Verzonden!", ephemeral=True)
+
+
+# --- /PARTNERPANEL COMMANDO ---
+@bot.tree.command(name="partnerpanel", description="Plaats partner paneel.")
+async def partnerpanel(interaction: discord.Interaction):
+    if interaction.user.id not in OWNER_IDS:
+        if not any(r.id == ROLE_ACCEPTEREN_BEHEER or r.id == ROLE_PARTNER_BEHEER for r in interaction.user.roles):
+            await interaction.response.send_message("Geen toestemming.", ephemeral=True)
+            return
+
+    await interaction.response.defer(ephemeral=True)
+    target = interaction.guild.get_channel(CHANNEL_PARTNER_PANEL)
+    if not target:
+        await interaction.followup.send("Partner panel kanaal niet gevonden.", ephemeral=True)
+        return
+
+    embed = discord.Embed(title="🤝 Partner Worden", description="Klik op de knop om partner te worden!", color=discord.Color.blurple())
+    await target.send(embed=embed, view=PartnerStartView())
+    await interaction.followup.send("Partner panel geplaatst!", ephemeral=True)
+
+
 bot.run(TOKEN)
