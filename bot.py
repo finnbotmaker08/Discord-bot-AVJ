@@ -67,9 +67,9 @@ pending_partner_messages = {}     # user_id -> partner bericht tekst
 partner_cooldowns = {}            # user_id -> datetime van laatste aanvraag
 
 # Dev Opdrachten Geheugen
-current_user_assignment = {}     # user_id -> gekozen opdracht naam
+current_user_assignment = {}     # user_id -> gekozen opdracht weergave
 user_reroll_count = {}           # user_id -> aantal keren dat er is gekozen voor "andere opdracht"
-claimed_assignments = set()      # Unieke opdrachten die al geaccepteerd en geclaimd zijn
+claimed_assignments = set()      # Unieke opdrachten die al geaccepteerd/geclaimd zijn
 
 EXACT_PARTNER_BERICHT = (
     "# 👋 AVJ Online Winkel is een online winkel met verschillende Roblox producten.\n"
@@ -92,20 +92,43 @@ EXACT_PARTNER_BERICHT = (
 )
 
 
-def get_random_dev_assignment(guild: discord.Guild, exclude_name: str = None) -> str:
-    """Haalt een willekeurige opdracht (kanaalnaam) op uit de opgegeven categorieën die nog niet bezet is."""
+async def get_random_dev_assignment(guild: discord.Guild, exclude_name: str = None) -> str:
+    """Haalt forum-posts (threads) op uit de opgegeven categorieën en voegt de kanaaltag toe."""
     candidates = []
+
     for cat_id in DEV_CATEGORIES:
-        category = guild.get_channel(cat_id)
+        category = guild.get_channel(cat_id) if guild else None
         if category and isinstance(category, discord.CategoryChannel):
             for channel in category.channels:
-                clean_name = channel.name.replace("-", " ").replace("_", " ").title()
-                if clean_name not in claimed_assignments and clean_name != exclude_name:
-                    candidates.append(clean_name)
+                # Als het een Forum Channel is (of een TextChannel met threads)
+                if isinstance(channel, discord.ForumChannel) or hasattr(channel, 'threads'):
+                    # Haal actieve en gearchiveerde threads (posts) op
+                    threads_to_check = list(channel.threads)
+                    try:
+                        archived = [t async for t in channel.archived_threads(limit=50)]
+                        threads_to_check.extend(archived)
+                    except Exception:
+                        pass
+
+                    for thread in threads_to_check:
+                        post_name = thread.name.strip()
+                        full_display = f"{post_name} (in <#{channel.id}>)"
+
+                        if full_display not in claimed_assignments and full_display != exclude_name:
+                            candidates.append(full_display)
+                else:
+                    # Standaard tekstkanaal fallback
+                    clean_name = f"{channel.name.replace('-', ' ').title()} (in <#{channel.id}>)"
+                    if clean_name not in claimed_assignments and clean_name != exclude_name:
+                        candidates.append(clean_name)
 
     if not candidates:
-        # Fallback standaardvoorbeelden indien geen geschikte kanalen
-        fallback_list = ["Roblox Studio UI Design", "Custom Car Scripting", "Map Building Project", "Roblox Radio System", "Advanced Inventory Script"]
+        fallback_list = [
+            "Augurkenfabriek (in <#1505470953021505699>)",
+            "Fabriekmachine (in <#1505470953021505699>)",
+            "Luxe Appartement (in <#1505470953021505699>)",
+            "Hoge Woning (in <#1505470953021505699>)"
+        ]
         candidates = [f for f in fallback_list if f not in claimed_assignments and f != exclude_name]
 
     return random.choice(candidates) if candidates else "Algemene Roblox Ontwikkeling Opdracht"
@@ -170,22 +193,22 @@ class DevPriceModal(discord.ui.Modal, title="Prijsopgave Developer Opdracht"):
             timestamp=datetime.now(timezone.utc)
         )
         embed.add_field(name="👨‍💻 Developer", value=f"{interaction.user.mention} (`{interaction.user.id}`)", inline=False)
-        embed.add_field(name="📦 Gekozen Opdracht", value=f"**{self.assignment_name}**", inline=False)
+        embed.add_field(name="📦 Gekozen Opdracht", value=f"{self.assignment_name}", inline=False)
         embed.add_field(name="💰 Vraagprijs", value=f"**{self.prijs.value}**", inline=False)
         embed.set_footer(text="AVJ Developer Beheer", icon_url=interaction.user.display_avatar.url)
 
         await review_channel.send(
             embed=embed,
-            view=DevReviewActionView(applicant=interaction.user, assignment=self.assignment_name, price=self.prijs.value)
+            view=DevReviewActionView(applicant_id=interaction.user.id, assignment=self.assignment_name, price=self.prijs.value)
         )
 
         await interaction.followup.send("✅ Je prijsopgave is succesvol ingediend! De staf zal je aanvraag beoordelen.", ephemeral=True)
 
 
 class DevReviewActionView(discord.ui.View):
-    def __init__(self, applicant: discord.User, assignment: str, price: str):
+    def __init__(self, applicant_id: int, assignment: str, price: str):
         super().__init__(timeout=None)
-        self.applicant = applicant
+        self.applicant_id = applicant_id
         self.assignment = assignment
         self.price = price
 
@@ -201,48 +224,57 @@ class DevReviewActionView(discord.ui.View):
         except Exception:
             pass
 
-        # 1. Rol toewijzen
+        # 1. Betrouwbaar de member ophalen en rol toewijzen
+        member = None
         if guild:
-            member = guild.get_member(self.applicant.id)
+            try:
+                member = await guild.fetch_member(self.applicant_id)
+            except discord.NotFound:
+                member = guild.get_member(self.applicant_id)
+
             if member:
                 role = guild.get_role(ROLE_DEV_GEACCEPTEERD)
                 if role:
                     try:
                         await member.add_roles(role)
+                        print(f"Rol {ROLE_DEV_GEACCEPTEERD} succesvol toegewezen aan {member.display_name}")
                     except Exception as e:
                         print(f"Fout bij toewijzen dev rol: {e}")
 
-        # 2. Registreer opdracht als gekozen / bezet
+        # 2. Registreer als geclaimd
         claimed_assignments.add(self.assignment)
 
-        # 3. Bericht in DM van developer
+        # 3. DM sturen naar de applicant
         dm_text = (
             f"Uw opdracht-aanvraag is **goedgekeurd**! U kunt nu aan de slag.\n\n"
             f"Zorg ervoor dat u ten alle tijden foto's blijft sturen van uw project in het kanaal: <#{CHANNEL_DEV_PROGRESS}>.\n"
             f"Zodra uw project klaar is kunt u <@1328766617164972115> een dm sturen. Met de informatie welke opdracht en uw download bestand van uw eindresultaat."
         )
-        try:
-            await self.applicant.send(dm_text)
-        except discord.Forbidden:
-            pass
 
-        # 4. Automatisch aankondigingsbericht in CHANNEL_DEV_ANNOUNCEMENT
+        user_to_dm = member or await bot.fetch_user(self.applicant_id)
+        if user_to_dm:
+            try:
+                await user_to_dm.send(dm_text)
+            except discord.Forbidden:
+                pass
+
+        # 4. Aankondigingsbericht sturen
         if guild:
             announcement_channel = guild.get_channel(CHANNEL_DEV_ANNOUNCEMENT)
-            if announcement_channel:
+            if announcement_channel and user_to_dm:
                 embed_ann = discord.Embed(
                     title="🚀 Nieuwe Developer Gestart!",
                     description=(
-                        f"Developer {self.applicant.mention} is officieel gestart met een nieuwe opdracht voor **AVJ Online Winkel**!\n\n"
-                        f"📌 **Opdracht:** `{self.assignment}`\n"
+                        f"Developer {user_to_dm.mention} is officieel gestart met een nieuwe opdracht voor **AVJ Online Winkel**!\n\n"
+                        f"📌 **Opdracht:** {self.assignment}\n"
                         f"💼 **Status:** In Ontwikkeling\n\n"
                         f"Veel succes met het bouwen van het project!"
                     ),
                     color=discord.Color.green(),
                     timestamp=datetime.now(timezone.utc)
                 )
-                embed_ann.set_thumbnail(url=self.applicant.display_avatar.url)
-                await announcement_channel.send(content=f"🎉 {self.applicant.mention}", embed=embed_ann)
+                embed_ann.set_thumbnail(url=user_to_dm.display_avatar.url)
+                await announcement_channel.send(content=f"🎉 {user_to_dm.mention}", embed=embed_ann)
 
         await interaction.followup.send("✅ Developer-aanvraag goedgekeurd, rol toegewezen en aankondiging geplaatst!", ephemeral=True)
 
@@ -264,8 +296,11 @@ class DevReviewActionView(discord.ui.View):
             f"2. Dit product is al in de maak.\n"
             f"3. De vereiste kwalificaties of specificaties sluiten momenteel niet aan bij wat we zoeken."
         )
+
         try:
-            await self.applicant.send(dm_text)
+            user_to_dm = await bot.fetch_user(self.applicant_id)
+            if user_to_dm:
+                await user_to_dm.send(dm_text)
         except discord.Forbidden:
             pass
 
@@ -301,7 +336,7 @@ class DevChoiceView(discord.ui.View):
         user_reroll_count[self.user_id] = current_count + 1
 
         guild = interaction.client.guilds[0] if interaction.client.guilds else None
-        new_assignment = get_random_dev_assignment(guild, exclude_name=self.current_assignment)
+        new_assignment = await get_random_dev_assignment(guild, exclude_name=self.current_assignment)
         current_user_assignment[self.user_id] = new_assignment
 
         for child in self.children:
@@ -315,7 +350,7 @@ class DevChoiceView(discord.ui.View):
             title="🛠️ Jouw Nieuwe Developer Opdracht",
             description=(
                 f"Je hebt gekozen voor een andere opdracht.\n\n"
-                f"📋 **Nieuwe Opdracht:**\n> **{new_assignment}**\n\n"
+                f"📋 **Nieuwe Opdracht:**\n> {new_assignment}\n\n"
                 f"Ga je akkoord met deze nieuwe opdracht?"
             ),
             color=discord.Color.purple()
@@ -356,7 +391,7 @@ class DevStartView(discord.ui.View):
         user_id = interaction.user.id
         guild = interaction.guild or (bot.guilds[0] if bot.guilds else None)
 
-        assignment = get_random_dev_assignment(guild)
+        assignment = await get_random_dev_assignment(guild)
         current_user_assignment[user_id] = assignment
         user_reroll_count[user_id] = 0
 
@@ -365,7 +400,7 @@ class DevStartView(discord.ui.View):
             description=(
                 f"Beste **{interaction.user.display_name}**,\n\n"
                 f"Fijn dat je interesse hebt om een ontwikkeling te realiseren voor **AVJ Online Winkel**!\n\n"
-                f"📋 **Geselecteerde Opdracht:**\n> **{assignment}**\n\n"
+                f"📋 **Geselecteerde Opdracht:**\n> {assignment}\n\n"
                 f"Wat wil je doen met deze opdracht?"
             ),
             color=discord.Color.gold()
@@ -440,7 +475,11 @@ class PartnerReviewView(discord.ui.View):
             pass
 
         if guild:
-            member = guild.get_member(self.member.id)
+            try:
+                member = await guild.fetch_member(self.member.id)
+            except discord.NotFound:
+                member = guild.get_member(self.member.id)
+
             if member:
                 role = guild.get_role(ROLE_PARTNER_GEACCEPTEERD)
                 if role:
@@ -649,7 +688,6 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # DM afhandeling voor Partners
     if isinstance(message.channel, discord.DMChannel):
         user_id = message.author.id
 
@@ -728,7 +766,7 @@ async def review_command(interaction: discord.Interaction, naam: str, sterren: i
 async def say_command(interaction: discord.Interaction, bericht: str, afbeelding: discord.Attachment = None):
     if interaction.user.id not in OWNER_IDS:
         if not any(r.id in SAY_ROLE_IDS for r in interaction.user.roles):
-            await interaction.response.send_message("Geen toestemming.", ephemeral=True)
+            await interaction.response.send_message("Gqeen toestemming.", ephemeral=True)
             return
 
     file = await afbeelding.to_file() if afbeelding else None
