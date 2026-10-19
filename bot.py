@@ -22,7 +22,8 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # --- CONFIGURATIE ---
-ROLE_ACCEPTEREN_BEHEER = 1556578093081305159  # Alleen deze rol mag partners accepteren & afwijzen
+ROLE_ACCEPTEREN_BEHEER = 1556578093081305159  # Standaard partner beheer rol
+ROLE_PARTNER_ALLOW_EXTRA = [1475901447404126340, 1545038388091166790]  # Extra rollen toegestaan voor partner beoordeling
 ROLE_PARTNER_BEHEER = 1541819580173779026
 ROLE_PARTNER_GEACCEPTEERD = 1558829178541838396  # Rol die automatisch wordt gegeven bij partner acceptatie
 
@@ -42,7 +43,7 @@ SAY_ROLE_IDS = [
 ]
 
 # Kanalen
-CHANNEL_AANVRAAG = 1558743224384757820        # 1e indiening Partner (Beoordelingskanaal)
+CHANNEL_AANVRAAG = 1555910106040762408        # 1e indiening Partner (Beoordelingskanaal)
 CHANNEL_PARTNER_PUBLIC = 1558743246883131432  # 2e indiening Partner (Openbaar partnerkanaal)
 CHANNEL_PARTNER_PANEL = 1542844065702350878   # Waar het partnerpanel staat
 CHANNEL_TICKET = 1554523651745783940          # Waar het ticketpanel staat
@@ -92,6 +93,15 @@ EXACT_PARTNER_BERICHT = (
 )
 
 
+async def safe_defer(interaction: discord.Interaction):
+    """Zorgt ervoor dat defer nooit vastloopt op verlopen of reeds beantwoorde interacties."""
+    if not interaction.response.is_done():
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
+
+
 async def get_guild_channel_safe(guild: discord.Guild, channel_id: int):
     """Haalt een kanaal op via cache of API om 'None' fouten te voorkomen."""
     if not guild:
@@ -134,7 +144,7 @@ async def get_random_dev_assignment(guild: discord.Guild, exclude_name: str = No
 
     if not candidates:
         fallback_list = [
-            "Augurkenfabriek (in <#1505470953021505699>)",
+            "Augurtenfabriek (in <#1505470953021505699>)",
             "Fabriekmachine (in <#1505470953021505699>)",
             "Luxe Appartement (in <#1505470953021505699>)",
             "Hoge Woning (in <#1505470953021505699>)"
@@ -150,9 +160,9 @@ class TicketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Ticket aanmaken", style=discord.ButtonStyle.primary, emoji="🎫", custom_id="create_ticket")
+    @discord.ui.button(label="Ticket aanmaken", style=discord.ButtonStyle.primary, emoji="🎫", custom_id="avj_create_ticket_v2")
     async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
+        await safe_defer(interaction)
         guild = interaction.guild
         category = interaction.channel.category
 
@@ -187,7 +197,7 @@ class DevPriceModal(discord.ui.Modal, title="Prijsopgave Developer Opdracht"):
         self.assignment_name = assignment_name
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        await safe_defer(interaction)
 
         guild = interaction.guild or (interaction.client.guilds[0] if interaction.client.guilds else None)
         review_channel = await get_guild_channel_safe(guild, CHANNEL_DEV_REVIEW) if guild else None
@@ -222,9 +232,9 @@ class DevReviewActionView(discord.ui.View):
         self.assignment = assignment
         self.price = price
 
-    @discord.ui.button(label="Akkoord", style=discord.ButtonStyle.green, emoji="✅", custom_id="dev_review_accept")
+    @discord.ui.button(label="Akkoord", style=discord.ButtonStyle.green, emoji="✅", custom_id="avj_dev_review_accept_v2")
     async def accept_dev(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
+        await safe_defer(interaction)
         guild = interaction.guild or (bot.guilds[0] if bot.guilds else None)
 
         for child in self.children:
@@ -283,9 +293,9 @@ class DevReviewActionView(discord.ui.View):
 
         await interaction.followup.send("✅ Developer-aanvraag goedgekeurd, rol toegewezen en aankondiging geplaatst!", ephemeral=True)
 
-    @discord.ui.button(label="Deny", style=discord.ButtonStyle.red, emoji="❌", custom_id="dev_review_deny")
+    @discord.ui.button(label="Deny", style=discord.ButtonStyle.red, emoji="❌", custom_id="avj_dev_review_deny_v2")
     async def deny_dev(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
+        await safe_defer(interaction)
 
         for child in self.children:
             child.disabled = True
@@ -317,7 +327,7 @@ class DevChoiceView(discord.ui.View):
         self.user_id = user_id
         self.current_assignment = current_assignment
 
-    @discord.ui.button(label="Akkoord gaan met opdracht", style=discord.ButtonStyle.green, emoji="✅", custom_id="dev_choice_accept")
+    @discord.ui.button(label="Akkoord gaan met opdracht", style=discord.ButtonStyle.green, emoji="✅", custom_id="avj_dev_choice_accept_v2")
     async def accept_assignment(self, interaction: discord.Interaction, button: discord.ui.Button):
         for child in self.children:
             child.disabled = True
@@ -328,9 +338,9 @@ class DevChoiceView(discord.ui.View):
 
         await interaction.response.send_modal(DevPriceModal(assignment_name=self.current_assignment))
 
-    @discord.ui.button(label="Maak een andere opdracht", style=discord.ButtonStyle.secondary, emoji="🔀", custom_id="dev_choice_reroll")
+    @discord.ui.button(label="Maak een andere opdracht", style=discord.ButtonStyle.secondary, emoji="🔀", custom_id="avj_dev_choice_reroll_v2")
     async def reroll_assignment(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
+        await safe_defer(interaction)
 
         current_count = user_reroll_count.get(self.user_id, 0)
         if current_count >= 1:
@@ -373,7 +383,7 @@ class DevChoiceViewSingle(discord.ui.View):
         self.user_id = user_id
         self.current_assignment = current_assignment
 
-    @discord.ui.button(label="Akkoord gaan met opdracht", style=discord.ButtonStyle.green, emoji="✅", custom_id="dev_choice_single_accept")
+    @discord.ui.button(label="Akkoord gaan met opdracht", style=discord.ButtonStyle.green, emoji="✅", custom_id="avj_dev_choice_single_accept_v2")
     async def accept_assignment(self, interaction: discord.Interaction, button: discord.ui.Button):
         for child in self.children:
             child.disabled = True
@@ -389,9 +399,9 @@ class DevStartView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Opdracht Maken voor AVJ", style=discord.ButtonStyle.primary, emoji="💼", custom_id="dev_start_btn")
+    @discord.ui.button(label="Opdracht Maken voor AVJ", style=discord.ButtonStyle.primary, emoji="💼", custom_id="avj_dev_start_btn_v2")
     async def start_dev(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
+        await safe_defer(interaction)
         user_id = interaction.user.id
         guild = interaction.guild or (bot.guilds[0] if bot.guilds else None)
 
@@ -435,7 +445,7 @@ class DenyReasonModal(discord.ui.Modal, title="Aanvraag Afkeuren"):
         self.view_instance = view_instance
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        await safe_defer(interaction)
         for child in self.view_instance.children:
             child.disabled = True
         try:
@@ -448,6 +458,7 @@ class DenyReasonModal(discord.ui.Modal, title="Aanvraag Afkeuren"):
         except discord.Forbidden:
             pass
 
+        partner_cooldowns.pop(self.member.id, None)
         await interaction.followup.send(f"Aanvraag afgekeurd met reden: {self.reden.value}", ephemeral=True)
 
 
@@ -460,15 +471,16 @@ class PartnerReviewView(discord.ui.View):
         if interaction.user.id in OWNER_IDS:
             return True
         
-        role_ids = [role.id for role in interaction.user.roles]
-        if ROLE_ACCEPTEREN_BEHEER not in role_ids:
-            await interaction.response.send_message("❌ Jij hebt geen toestemming om deze partneraanvraag te beoordelen.", ephemeral=True)
-            return False
-        return True
+        role_ids = [role.id for role in interaction.user.roles] if interaction.guild else []
+        if ROLE_ACCEPTEREN_BEHEER in role_ids or any(rid in role_ids for rid in ROLE_PARTNER_ALLOW_EXTRA):
+            return True
 
-    @discord.ui.button(label="Accepteren", style=discord.ButtonStyle.green, custom_id="partner_accept_btn")
+        await interaction.response.send_message("❌ Jij hebt geen toestemming om deze partneraanvraag te beoordelen.", ephemeral=True)
+        return False
+
+    @discord.ui.button(label="Accepteren", style=discord.ButtonStyle.green, custom_id="avj_partner_accept_btn_v2")
     async def accept_partner(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
+        await safe_defer(interaction)
         guild = interaction.guild or (bot.guilds[0] if bot.guilds else None)
 
         for child in self.children:
@@ -514,117 +526,22 @@ class PartnerReviewView(discord.ui.View):
 
         pending_partner_submissions.pop(self.member.id, None)
         pending_partner_messages.pop(self.member.id, None)
+        partner_cooldowns.pop(self.member.id, None)
+
         await interaction.followup.send("Partner succesvol geaccepteerd, rol toegewezen en geplaatst in het partnerkanaal!", ephemeral=True)
 
-    @discord.ui.button(label="Afkeuren", style=discord.ButtonStyle.red, custom_id="partner_deny_btn")
+    @discord.ui.button(label="Afkeuren", style=discord.ButtonStyle.red, custom_id="avj_partner_deny_btn_v2")
     async def deny_partner(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(DenyReasonModal(self.member, interaction.message, self))
-
-
-class PartnerMsgSubmitView(discord.ui.View):
-    def __init__(self, user_id: int):
-        super().__init__(timeout=300)
-        self.user_id = user_id
-
-    @discord.ui.button(label="Partner bericht versturen", style=discord.ButtonStyle.green, emoji="📤", custom_id="partner_msg_done_btn")
-    async def msg_done(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        user_partner_msg = pending_partner_messages.get(self.user_id)
-        if not user_partner_msg:
-            await interaction.followup.send("Geen partner bericht ingevoerd!", ephemeral=True)
-            return
-
-        guild = interaction.guild or (bot.guilds[0] if bot.guilds else None)
-        aanvraag_kanaal = await get_guild_channel_safe(guild, CHANNEL_AANVRAAG) if guild else None
-        if not aanvraag_kanaal:
-            await interaction.followup.send("Aanvraagkanaal niet gevonden.", ephemeral=True)
-            return
-
-        image_url = pending_partner_submissions.get(self.user_id)
-        embed = discord.Embed(title="🤝 Nieuwe Partner Aanvraag", description=f"**Gebruiker:** {interaction.user.mention}\n\n{user_partner_msg}", color=discord.Color.blue())
-        if image_url:
-            embed.set_image(url=image_url)
-
-        await aanvraag_kanaal.send(embed=embed, view=PartnerReviewView(interaction.user))
-        for child in self.children:
-            child.disabled = True
-        try:
-            await interaction.message.edit(view=self)
-        except Exception:
-            pass
-        await interaction.followup.send("Aanvraag ingediend!", ephemeral=True)
-
-
-class PartnerImageView(discord.ui.View):
-    def __init__(self, user_id: int):
-        super().__init__(timeout=300)
-        self.user_id = user_id
-
-    @discord.ui.button(label="Foto verstuurd", style=discord.ButtonStyle.blurple, emoji="📸", custom_id="partner_image_sent_btn")
-    async def image_sent(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        for child in self.children:
-            child.disabled = True
-        try:
-            await interaction.message.edit(view=self)
-        except Exception:
-            pass
-        await interaction.user.send(content="Stuur nu je partner bericht in deze DM:", view=PartnerMsgSubmitView(self.user_id))
-
-
-class PartnerSendMsgView(discord.ui.View):
-    def __init__(self, user_id: int):
-        super().__init__(timeout=300)
-        self.user_id = user_id
-
-    @discord.ui.button(label="Bericht verstuurd", style=discord.ButtonStyle.green, emoji="📤", custom_id="partner_msg_sent_btn")
-    async def msg_sent(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        for child in self.children:
-            child.disabled = True
-        try:
-            await interaction.message.edit(view=self)
-        except Exception:
-            pass
-        await interaction.user.send(content="Stuur nu een screenshot als bewijs:", view=PartnerImageView(self.user_id))
-
-
-class MemberCheckView(discord.ui.View):
-    def __init__(self, user_id: int):
-        super().__init__(timeout=300)
-        self.user_id = user_id
-
-    @discord.ui.button(label="Ja, ik voldoe hieraan (15+ leden)", style=discord.ButtonStyle.green, custom_id="member_check_yes")
-    async def yes_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        for child in self.children:
-            child.disabled = True
-        try:
-            await interaction.message.edit(view=self)
-        except Exception:
-            pass
-        await interaction.user.send(content=f"Plaats dit bericht:\n\n{EXACT_PARTNER_BERICHT}", view=PartnerSendMsgView(self.user_id))
-        await interaction.followup.send("DM verzonden!", ephemeral=True)
-
-    @discord.ui.button(label="Nee", style=discord.ButtonStyle.red, custom_id="member_check_no")
-    async def no_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        for child in self.children:
-            child.disabled = True
-        try:
-            await interaction.message.edit(view=self)
-        except Exception:
-            pass
-        await interaction.followup.send("Geannuleerd.", ephemeral=True)
 
 
 class PartnerStartView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Start Partner Aanvraag", style=discord.ButtonStyle.green, custom_id="partner_start_btn")
+    @discord.ui.button(label="Start Partner Aanvraag", style=discord.ButtonStyle.green, custom_id="avj_partner_start_btn_v2")
     async def start_partner_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
+        await safe_defer(interaction)
         user_id = interaction.user.id
         now = datetime.now(timezone.utc)
 
@@ -635,9 +552,10 @@ class PartnerStartView(discord.ui.View):
         partner_cooldowns[user_id] = now
         try:
             dm = await interaction.user.create_dm()
-            await dm.send("Voldoet jouw server aan minimaal 15 leden?", view=MemberCheckView(user_id))
+            await dm.send(f"Plaats dit bericht in jouw server:\n\n{EXACT_PARTNER_BERICHT}\n\n📸 **Stuur na het plaatsen een screenshot in deze DM als bewijs:**")
             await interaction.followup.send("Check je DM!", ephemeral=True)
         except discord.Forbidden:
+            partner_cooldowns.pop(user_id, None)
             await interaction.followup.send("❌ Kan geen DM sturen.", ephemeral=True)
 
 
@@ -668,14 +586,16 @@ async def before_check_tiktok_live():
 async def on_ready():
     print(f"Ingelogd als {bot.user.name} (ID: {bot.user.id})")
 
-    # 1. Sync commando's
+    bot.add_view(PartnerStartView())
+    bot.add_view(DevStartView())
+    bot.add_view(TicketView())
+
     try:
         synced = await bot.tree.sync()
         print(f"Gesynchroniseerd: {len(synced)} commando('s).")
     except Exception as e:
         print(f"Sync fout: {e}")
 
-    # 2. Check ticket panel
     try:
         ticket_kanaal = bot.get_channel(CHANNEL_TICKET)
         if ticket_kanaal:
@@ -689,7 +609,6 @@ async def on_ready():
     except Exception as e:
         print(f"Ticket kanaal fout: {e}")
 
-    # 3. Start TikTok background task
     if not check_tiktok_live.is_running():
         check_tiktok_live.start()
 
@@ -704,14 +623,34 @@ async def on_message(message):
     if isinstance(message.channel, discord.DMChannel):
         user_id = message.author.id
 
+        # Stap 1: Gebruiker stuurt een screenshot (Afbeelding)
         if message.attachments:
             if user_id not in pending_partner_submissions:
                 pending_partner_submissions[user_id] = message.attachments[0].url
-                await message.channel.send("📸 Partner foto ontvangen! Klik op **'Foto verstuurd'**.")
+                await message.channel.send("📸 **Foto ontvangen!** Stuur nu je partner bericht in deze DM:")
 
-        if message.content:
+        # Stap 2: Gebruiker stuurt het partner bericht (Tekst)
+        elif message.content:
             if user_id in pending_partner_submissions and user_id not in pending_partner_messages:
                 pending_partner_messages[user_id] = message.content
+
+                guild = bot.guilds[0] if bot.guilds else None
+                aanvraag_kanaal = await get_guild_channel_safe(guild, CHANNEL_AANVRAAG) if guild else None
+
+                if aanvraag_kanaal:
+                    image_url = pending_partner_submissions.get(user_id)
+                    embed = discord.Embed(
+                        title="🤝 Nieuwe Partner Aanvraag",
+                        description=f"**Gebruiker:** {message.author.mention}\n\n{message.content}",
+                        color=discord.Color.blue()
+                    )
+                    if image_url:
+                        embed.set_image(url=image_url)
+
+                    await aanvraag_kanaal.send(embed=embed, view=PartnerReviewView(message.author))
+                    await message.channel.send("✅ **Bedankt! Je partneraanvraag is succesvol ingediend bij ons beheerteam.**")
+                else:
+                    await message.channel.send("❌ Er is iets misgegaan met het vinden van het aanvraagkanaal.")
 
     await bot.process_commands(message)
 
@@ -719,13 +658,13 @@ async def on_message(message):
 # --- /DEVOPDRACHT COMMANDO ---
 @bot.tree.command(name="devopdracht", description="Plaats het paneel voor developer opdrachten.")
 async def devopdracht_panel(interaction: discord.Interaction):
-    if interaction.user.id not in OWNER_IDS:
-        user_roles = [r.id for r in interaction.user.roles]
-        if not any(rid in user_roles for rid in ROLE_DEV_PANEL_ALLOW):
-            await interaction.response.send_message("❌ Jij hebt geen toestemming om dit paneel te plaatsen.", ephemeral=True)
-            return
+    await safe_defer(interaction)
 
-    await interaction.response.defer(ephemeral=True)
+    if interaction.user.id not in OWNER_IDS:
+        user_roles = [r.id for r in interaction.user.roles] if interaction.guild else []
+        if not any(rid in user_roles for rid in ROLE_DEV_PANEL_ALLOW):
+            await interaction.followup.send("❌ Jij hebt geen toestemming om dit paneel te plaatsen.", ephemeral=True)
+            return
 
     embed = discord.Embed(
         title="💼 AVJ Developer Opdrachten",
@@ -747,6 +686,25 @@ async def devopdracht_panel(interaction: discord.Interaction):
     await interaction.followup.send("✅ Developer opdrachten paneel succesvol geplaatst!", ephemeral=True)
 
 
+# --- /RESETPARTNER COMMANDO ---
+@bot.tree.command(name="resetpartner", description="Reset de partner cooldown van een gebruiker.")
+@app_commands.describe(gebruiker="De gebruiker wiens cooldown gereset moet worden")
+async def resetpartner(interaction: discord.Interaction, gebruiker: discord.User):
+    await safe_defer(interaction)
+
+    if interaction.user.id not in OWNER_IDS:
+        user_roles = [r.id for r in interaction.user.roles] if interaction.guild else []
+        if ROLE_ACCEPTEREN_BEHEER not in user_roles and not any(rid in user_roles for rid in ROLE_PARTNER_ALLOW_EXTRA) and ROLE_PARTNER_BEHEER not in user_roles:
+            await interaction.followup.send("❌ Jij hebt geen toestemming om cooldowns te resetten.", ephemeral=True)
+            return
+
+    if gebruiker.id in partner_cooldowns:
+        partner_cooldowns.pop(gebruiker.id, None)
+        await interaction.followup.send(f"✅ Partner cooldown voor {gebruiker.mention} is succesvol gereset!", ephemeral=True)
+    else:
+        await interaction.followup.send(f"ℹ️ {gebruiker.mention} had geen actieve partner cooldown.", ephemeral=True)
+
+
 # --- /REVIEW COMMANDO ---
 @bot.tree.command(name="review", description="Geef een review over iemand.")
 @app_commands.describe(naam="Naam", sterren="Sterren 1-5", tips_of_uitleg="Uitleg")
@@ -758,7 +716,7 @@ async def devopdracht_panel(interaction: discord.Interaction):
     app_commands.Choice(name="⭐⭐⭐⭐⭐ 5 Sterren", value=5)
 ])
 async def review_command(interaction: discord.Interaction, naam: str, sterren: int, tips_of_uitleg: str):
-    await interaction.response.defer(ephemeral=True)
+    await safe_defer(interaction)
     guild = interaction.guild
     review_kanaal = await get_guild_channel_safe(guild, CHANNEL_REVIEW) if guild else None
     if not review_kanaal:
@@ -777,47 +735,53 @@ async def review_command(interaction: discord.Interaction, naam: str, sterren: i
 @bot.tree.command(name="say", description="Laat de bot een bericht sturen.")
 @app_commands.describe(bericht="Bericht", afbeelding="Optionele afbeelding")
 async def say_command(interaction: discord.Interaction, bericht: str, afbeelding: discord.Attachment = None):
+    await safe_defer(interaction)
+
     if interaction.user.id not in OWNER_IDS:
-        if not any(r.id in SAY_ROLE_IDS for r in interaction.user.roles):
-            await interaction.response.send_message("Geen toestemming.", ephemeral=True)
+        user_roles = [r.id for r in interaction.user.roles] if interaction.guild else []
+        if not any(r in SAY_ROLE_IDS for r in user_roles):
+            await interaction.followup.send("Geen toestemming.", ephemeral=True)
             return
 
     file = await afbeelding.to_file() if afbeelding else None
     await interaction.channel.send(content=bericht, file=file)
-    await interaction.response.send_message("Verzonden!", ephemeral=True)
+    await interaction.followup.send("Verzonden!", ephemeral=True)
 
 
 # --- /PARTNERPANEL COMMANDO ---
-@bot.tree.command(name="partnerpanel", description="Plaats partner paneel.")
+@bot.tree.command(name="partnerpanel", description="Plaats het korte partner paneel.")
 async def partnerpanel(interaction: discord.Interaction):
+    await safe_defer(interaction)
+
     if interaction.user.id not in OWNER_IDS:
-        if not any(r.id == ROLE_ACCEPTEREN_BEHEER or r.id == ROLE_PARTNER_BEHEER for r in interaction.user.roles):
-            await interaction.response.send_message("Geen toestemming.", ephemeral=True)
+        user_roles = [r.id for r in interaction.user.roles] if interaction.guild else []
+        if not any(r == ROLE_ACCEPTEREN_BEHEER or r in ROLE_PARTNER_ALLOW_EXTRA or r == ROLE_PARTNER_BEHEER for r in user_roles):
+            await interaction.followup.send("Geen toestemming.", ephemeral=True)
             return
 
-    await interaction.response.defer(ephemeral=True)
     target = await get_guild_channel_safe(interaction.guild, CHANNEL_PARTNER_PANEL)
     if not target:
         await interaction.followup.send("Partner panel kanaal niet gevonden.", ephemeral=True)
         return
 
+    try:
+        await target.purge(limit=20)
+    except Exception as e:
+        print(f"Kon kanaal niet leegmaken via purge, handmatig proberen: {e}")
+        try:
+            async for msg in target.history(limit=20):
+                await msg.delete()
+        except Exception as ex:
+            print(f"Fout bij handmatig verwijderen: {ex}")
+
     embed = discord.Embed(
-        title="🤝 AVJ Partner Worden",
-        description=(
-            "Wil jij graag een samenwerking/partnership starten met **AVJ Online Winkel**?\n\n"
-            "📌 **Voorwaarden:**\n"
-            "• Jouw Discord-server moet minimaal **15 leden** hebben.\n"
-            "• Je dient ons partnerbericht in jouw server te plaatsen.\n"
-            "• Je levert een screenshot aan als bewijs van plaatsing.\n\n"
-            "✨ **Hoe werkt het?**\n"
-            "Klik op de knop hieronder om de partneraanvraag te starten via privébericht (DM)!"
-        ),
+        title="🤝 Partner Worden",
+        description="Klik op de knop om partner te worden!",
         color=discord.Color.blurple()
     )
-    embed.set_footer(text="AVJ Partner Management", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
 
     await target.send(embed=embed, view=PartnerStartView())
-    await interaction.followup.send("✅ Partner panel geplaatst!", ephemeral=True)
+    await interaction.followup.send("✅ Partner panel geplaatst en kanaal opgeschoond!", ephemeral=True)
 
 
 bot.run(TOKEN)
