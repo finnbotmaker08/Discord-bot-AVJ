@@ -92,17 +92,26 @@ EXACT_PARTNER_BERICHT = (
 )
 
 
+async def get_guild_channel_safe(guild: discord.Guild, channel_id: int):
+    """Haalt een kanaal op via cache of API om 'None' fouten te voorkomen."""
+    channel = guild.get_channel(channel_id)
+    if not channel:
+        try:
+            channel = await guild.fetch_channel(channel_id)
+        except Exception:
+            pass
+    return channel
+
+
 async def get_random_dev_assignment(guild: discord.Guild, exclude_name: str = None) -> str:
     """Haalt forum-posts (threads) op uit de opgegeven categorieën en voegt de kanaaltag toe."""
     candidates = []
 
     for cat_id in DEV_CATEGORIES:
-        category = guild.get_channel(cat_id) if guild else None
+        category = await get_guild_channel_safe(guild, cat_id)
         if category and isinstance(category, discord.CategoryChannel):
             for channel in category.channels:
-                # Als het een Forum Channel is (of een TextChannel met threads)
                 if isinstance(channel, discord.ForumChannel) or hasattr(channel, 'threads'):
-                    # Haal actieve en gearchiveerde threads (posts) op
                     threads_to_check = list(channel.threads)
                     try:
                         archived = [t async for t in channel.archived_threads(limit=50)]
@@ -117,7 +126,6 @@ async def get_random_dev_assignment(guild: discord.Guild, exclude_name: str = No
                         if full_display not in claimed_assignments and full_display != exclude_name:
                             candidates.append(full_display)
                 else:
-                    # Standaard tekstkanaal fallback
                     clean_name = f"{channel.name.replace('-', ' ').title()} (in <#{channel.id}>)"
                     if clean_name not in claimed_assignments and clean_name != exclude_name:
                         candidates.append(clean_name)
@@ -179,8 +187,8 @@ class DevPriceModal(discord.ui.Modal, title="Prijsopgave Developer Opdracht"):
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        guild = interaction.client.guilds[0] if interaction.client.guilds else None
-        review_channel = guild.get_channel(CHANNEL_DEV_REVIEW) if guild else None
+        guild = interaction.guild or (interaction.client.guilds[0] if interaction.client.guilds else None)
+        review_channel = await get_guild_channel_safe(guild, CHANNEL_DEV_REVIEW) if guild else None
 
         if not review_channel:
             await interaction.followup.send("❌ Fout: Het reviewkanaal voor opdrachten kon niet worden gevonden.", ephemeral=True)
@@ -224,7 +232,6 @@ class DevReviewActionView(discord.ui.View):
         except Exception:
             pass
 
-        # 1. Betrouwbaar de member ophalen en rol toewijzen
         member = None
         if guild:
             try:
@@ -237,14 +244,11 @@ class DevReviewActionView(discord.ui.View):
                 if role:
                     try:
                         await member.add_roles(role)
-                        print(f"Rol {ROLE_DEV_GEACCEPTEERD} succesvol toegewezen aan {member.display_name}")
                     except Exception as e:
                         print(f"Fout bij toewijzen dev rol: {e}")
 
-        # 2. Registreer als geclaimd
         claimed_assignments.add(self.assignment)
 
-        # 3. DM sturen naar de applicant
         dm_text = (
             f"Uw opdracht-aanvraag is **goedgekeurd**! U kunt nu aan de slag.\n\n"
             f"Zorg ervoor dat u ten alle tijden foto's blijft sturen van uw project in het kanaal: <#{CHANNEL_DEV_PROGRESS}>.\n"
@@ -258,9 +262,8 @@ class DevReviewActionView(discord.ui.View):
             except discord.Forbidden:
                 pass
 
-        # 4. Aankondigingsbericht sturen
         if guild:
-            announcement_channel = guild.get_channel(CHANNEL_DEV_ANNOUNCEMENT)
+            announcement_channel = await get_guild_channel_safe(guild, CHANNEL_DEV_ANNOUNCEMENT)
             if announcement_channel and user_to_dm:
                 embed_ann = discord.Embed(
                     title="🚀 Nieuwe Developer Gestart!",
@@ -293,8 +296,7 @@ class DevReviewActionView(discord.ui.View):
             f"Uw aanvraag voor de opdracht **{self.assignment}** is helaas **afgekeurd**.\n\n"
             f"Dit kan de volgende redenen hebben:\n"
             f"1. De prijs is te hoog.\n"
-            f"2. Dit product is al in de maak.\n"
-            f"3. De vereiste kwalificaties of specificaties sluiten momenteel niet aan bij wat we zoeken."
+            f"2. Dit product is al in de maak."
         )
 
         try:
@@ -335,7 +337,7 @@ class DevChoiceView(discord.ui.View):
 
         user_reroll_count[self.user_id] = current_count + 1
 
-        guild = interaction.client.guilds[0] if interaction.client.guilds else None
+        guild = interaction.guild or (interaction.client.guilds[0] if interaction.client.guilds else None)
         new_assignment = await get_random_dev_assignment(guild, exclude_name=self.current_assignment)
         current_user_assignment[self.user_id] = new_assignment
 
@@ -493,12 +495,12 @@ class PartnerReviewView(discord.ui.View):
         except discord.Forbidden:
             pass
 
-        partner_kanaal = guild.get_channel(CHANNEL_PARTNER_PUBLIC) if guild else None
+        partner_kanaal = await get_guild_channel_safe(guild, CHANNEL_PARTNER_PUBLIC) if guild else None
         if partner_kanaal:
             user_partner_msg = pending_partner_messages.get(self.member.id, "Geen bericht.")
             await partner_kanaal.send(content=user_partner_msg)
 
-        log_kanaal = guild.get_channel(CHANNEL_LOGS) if guild else None
+        log_kanaal = await get_guild_channel_safe(guild, CHANNEL_LOGS) if guild else None
         if log_kanaal:
             embed_log = discord.Embed(
                 title="✅ Partner Geaccepteerd",
@@ -530,8 +532,8 @@ class PartnerMsgSubmitView(discord.ui.View):
             await interaction.followup.send("Geen partner bericht ingevoerd!", ephemeral=True)
             return
 
-        guild = bot.guilds[0] if bot.guilds else None
-        aanvraag_kanaal = guild.get_channel(CHANNEL_AANVRAAG) if guild else None
+        guild = interaction.guild or (bot.guilds[0] if bot.guilds else None)
+        aanvraag_kanaal = await get_guild_channel_safe(guild, CHANNEL_AANVRAAG) if guild else None
         if not aanvraag_kanaal:
             await interaction.followup.send("Aanvraagkanaal niet gevonden.", ephemeral=True)
             return
@@ -766,7 +768,7 @@ async def review_command(interaction: discord.Interaction, naam: str, sterren: i
 async def say_command(interaction: discord.Interaction, bericht: str, afbeelding: discord.Attachment = None):
     if interaction.user.id not in OWNER_IDS:
         if not any(r.id in SAY_ROLE_IDS for r in interaction.user.roles):
-            await interaction.response.send_message("Gqeen toestemming.", ephemeral=True)
+            await interaction.response.send_message("Geen toestemming.", ephemeral=True)
             return
 
     file = await afbeelding.to_file() if afbeelding else None
@@ -783,7 +785,7 @@ async def partnerpanel(interaction: discord.Interaction):
             return
 
     await interaction.response.defer(ephemeral=True)
-    target = interaction.guild.get_channel(CHANNEL_PARTNER_PANEL)
+    target = await get_guild_channel_safe(interaction.guild, CHANNEL_PARTNER_PANEL)
     if not target:
         await interaction.followup.send("Partner panel kanaal niet gevonden.", ephemeral=True)
         return
