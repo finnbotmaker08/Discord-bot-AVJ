@@ -94,6 +94,8 @@ EXACT_PARTNER_BERICHT = (
 
 async def get_guild_channel_safe(guild: discord.Guild, channel_id: int):
     """Haalt een kanaal op via cache of API om 'None' fouten te voorkomen."""
+    if not guild:
+        return None
     channel = guild.get_channel(channel_id)
     if not channel:
         try:
@@ -251,7 +253,7 @@ class DevReviewActionView(discord.ui.View):
 
         dm_text = (
             f"Uw opdracht-aanvraag is **goedgekeurd**! U kunt nu aan de slag.\n\n"
-            f"Zorg ervoor dat u ten alle tijden foto's blijft sturen van uw project in het kanaal: <#{CHANNEL_DEV_PROGRESS}>.\n"
+            f"Zorg ervoor dat u te allen tijde foto's blijft sturen van uw project in het kanaal: <#{CHANNEL_DEV_PROGRESS}>.\n"
             f"Zodra uw project klaar is kunt u <@1328766617164972115> een dm sturen. Met de informatie welke opdracht en uw download bestand van uw eindresultaat."
         )
 
@@ -665,24 +667,33 @@ async def before_check_tiktok_live():
 @bot.event
 async def on_ready():
     print(f"Ingelogd als {bot.user.name} (ID: {bot.user.id})")
-    if not check_tiktok_live.is_running():
-        check_tiktok_live.start()
 
+    # 1. Sync commando's
     try:
         synced = await bot.tree.sync()
         print(f"Gesynchroniseerd: {len(synced)} commando('s).")
     except Exception as e:
         print(f"Sync fout: {e}")
 
-    ticket_kanaal = bot.get_channel(CHANNEL_TICKET)
-    if ticket_kanaal:
-        has_view = False
-        async for message in ticket_kanaal.history(limit=5):
-            if message.author == bot.user:
-                has_view = True
-                break
-        if not has_view:
-            await ticket_kanaal.send("**Ondersteuning & Tickets**\nKlik op de knop om een ticket te openen.", view=TicketView())
+    # 2. Check ticket panel
+    try:
+        ticket_kanaal = bot.get_channel(CHANNEL_TICKET)
+        if ticket_kanaal:
+            has_view = False
+            async for message in ticket_kanaal.history(limit=5):
+                if message.author == bot.user:
+                    has_view = True
+                    break
+            if not has_view:
+                await ticket_kanaal.send("**Ondersteuning & Tickets**\nKlik op de knop om een ticket te openen.", view=TicketView())
+    except Exception as e:
+        print(f"Ticket kanaal fout: {e}")
+
+    # 3. Start TikTok background task
+    if not check_tiktok_live.is_running():
+        check_tiktok_live.start()
+
+    print("✅ Bot is volledig operationeel en gereed!")
 
 
 @bot.event
@@ -749,7 +760,7 @@ async def devopdracht_panel(interaction: discord.Interaction):
 async def review_command(interaction: discord.Interaction, naam: str, sterren: int, tips_of_uitleg: str):
     await interaction.response.defer(ephemeral=True)
     guild = interaction.guild
-    review_kanaal = guild.get_channel(CHANNEL_REVIEW) if guild else None
+    review_kanaal = await get_guild_channel_safe(guild, CHANNEL_REVIEW) if guild else None
     if not review_kanaal:
         await interaction.followup.send("Review kanaal niet gevonden.", ephemeral=True)
         return
@@ -790,9 +801,23 @@ async def partnerpanel(interaction: discord.Interaction):
         await interaction.followup.send("Partner panel kanaal niet gevonden.", ephemeral=True)
         return
 
-    embed = discord.Embed(title="🤝 Partner Worden", description="Klik op de knop om partner te worden!", color=discord.Color.blurple())
+    embed = discord.Embed(
+        title="🤝 AVJ Partner Worden",
+        description=(
+            "Wil jij graag een samenwerking/partnership starten met **AVJ Online Winkel**?\n\n"
+            "📌 **Voorwaarden:**\n"
+            "• Jouw Discord-server moet minimaal **15 leden** hebben.\n"
+            "• Je dient ons partnerbericht in jouw server te plaatsen.\n"
+            "• Je levert een screenshot aan als bewijs van plaatsing.\n\n"
+            "✨ **Hoe werkt het?**\n"
+            "Klik op de knop hieronder om de partneraanvraag te starten via privébericht (DM)!"
+        ),
+        color=discord.Color.blurple()
+    )
+    embed.set_footer(text="AVJ Partner Management", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
+
     await target.send(embed=embed, view=PartnerStartView())
-    await interaction.followup.send("Partner panel geplaatst!", ephemeral=True)
+    await interaction.followup.send("✅ Partner panel geplaatst!", ephemeral=True)
 
 
 bot.run(TOKEN)
