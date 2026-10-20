@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from flask import Flask
 from TikTokLive import TikTokLiveClient
 
-# --- FLASK WEBSERVER VOOR RENDER ---
+# --- FLASK WEBSERVER VOOR RENDER (HOUDT DE BOT DRAAIEND) ---
 app = Flask("")
 
 
@@ -124,7 +124,7 @@ async def safe_defer(interaction: discord.Interaction):
 
 
 def heeft_toestemming(interaction: discord.Interaction) -> bool:
-  """Controleert of iemand owner is of een van de toegestane beheerrollen heeft (inclusief 1562095503645212752 en 1545038388091166790)."""
+  """Controleert of iemand owner is of een van de toegestane beheerrollen heeft."""
   if interaction.user.id in OWNER_IDS:
     return True
   if interaction.guild and hasattr(interaction.user, "roles"):
@@ -143,15 +143,26 @@ def heeft_toestemming(interaction: discord.Interaction) -> bool:
 
 
 async def get_guild_channel_safe(guild: discord.Guild, channel_id: int):
-  if not guild:
-    return None
-  channel = guild.get_channel(channel_id)
-  if not channel:
+  if guild:
+    channel = guild.get_channel(channel_id)
+    if channel:
+      return channel
     try:
-      channel = await guild.fetch_channel(channel_id)
+      return await guild.fetch_channel(channel_id)
     except Exception:
       pass
-  return channel
+
+  for g in bot.guilds:
+    ch = g.get_channel(channel_id)
+    if ch:
+      return ch
+    try:
+      ch = await g.fetch_channel(channel_id)
+      if ch:
+        return ch
+    except Exception:
+      pass
+  return None
 
 
 async def get_random_dev_assignment(
@@ -253,11 +264,7 @@ class DevPriceModal(discord.ui.Modal, title="Prijsopgave Developer Opdracht"):
     guild = interaction.guild or (
         interaction.client.guilds[0] if interaction.client.guilds else None
     )
-    review_channel = (
-        await get_guild_channel_safe(guild, CHANNEL_DEV_REVIEW)
-        if guild
-        else None
-    )
+    review_channel = await get_guild_channel_safe(guild, CHANNEL_DEV_REVIEW)
 
     if not review_channel:
       await interaction.followup.send(
@@ -357,23 +364,22 @@ class DevReviewActionView(discord.ui.View):
       except discord.Forbidden:
         pass
 
-    if guild:
-      announcement_channel = await get_guild_channel_safe(
-          guild, CHANNEL_DEV_ANNOUNCEMENT
+    announcement_channel = await get_guild_channel_safe(
+        guild, CHANNEL_DEV_ANNOUNCEMENT
+    )
+    if announcement_channel and user_to_dm:
+      embed_ann = discord.Embed(
+          title="🚀 Nieuwe Developer Gestart!",
+          description=(
+              f"Developer {user_to_dm.mention} is gestart met:"
+              f" **{self.assignment}**!"
+          ),
+          color=discord.Color.green(),
+          timestamp=datetime.now(timezone.utc),
       )
-      if announcement_channel and user_to_dm:
-        embed_ann = discord.Embed(
-            title="🚀 Nieuwe Developer Gestart!",
-            description=(
-                f"Developer {user_to_dm.mention} is gestart met:"
-                f" **{self.assignment}**!"
-            ),
-            color=discord.Color.green(),
-            timestamp=datetime.now(timezone.utc),
-        )
-        await announcement_channel.send(
-            content=f"🎉 {user_to_dm.mention}", embed=embed_ann
-        )
+      await announcement_channel.send(
+          content=f"🎉 {user_to_dm.mention}", embed=embed_ann
+      )
 
     await interaction.followup.send("✅ Goedgekeurd!", ephemeral=True)
 
@@ -633,19 +639,13 @@ class PartnerReviewView(discord.ui.View):
     except discord.Forbidden:
       pass
 
-    partner_kanaal = (
-        await get_guild_channel_safe(guild, CHANNEL_PARTNER_PUBLIC)
-        if guild
-        else None
-    )
+    partner_kanaal = await get_guild_channel_safe(guild, CHANNEL_PARTNER_PUBLIC)
     if partner_kanaal:
       await partner_kanaal.send(
           content=pending_partner_messages.get(self.member.id, "Geen bericht.")
       )
 
-    log_kanaal = (
-        await get_guild_channel_safe(guild, CHANNEL_LOGS) if guild else None
-    )
+    log_kanaal = await get_guild_channel_safe(guild, CHANNEL_LOGS)
     if log_kanaal:
       embed_log = discord.Embed(
           title="✅ Partner Geaccepteerd",
@@ -828,12 +828,7 @@ async def on_message(message):
           and user_id not in pending_partner_messages
       ):
         pending_partner_messages[user_id] = message.content
-        guild = bot.guilds[0] if bot.guilds else None
-        aanvraag_kanaal = (
-            await get_guild_channel_safe(guild, CHANNEL_AANVRAAG)
-            if guild
-            else None
-        )
+        aanvraag_kanaal = await get_guild_channel_safe(None, CHANNEL_AANVRAAG)
 
         if aanvraag_kanaal:
           embed = discord.Embed(
@@ -851,6 +846,11 @@ async def on_message(message):
           )
           await message.channel.send(
               "✅ Ingediend bij het beheerteam!"
+          )
+        else:
+          await message.channel.send(
+              "❌ Er is een fout opgetreden: het aanvraagkanaal kon niet worden"
+              " gevonden."
           )
 
   await bot.process_commands(message)
@@ -918,9 +918,7 @@ async def review_command(
 ):
   await safe_defer(interaction)
   guild = interaction.guild
-  review_kanaal = (
-      await get_guild_channel_safe(guild, CHANNEL_REVIEW) if guild else None
-  )
+  review_kanaal = await get_guild_channel_safe(guild, CHANNEL_REVIEW)
   if not review_kanaal:
     await interaction.followup.send(
         "Review kanaal niet gevonden.", ephemeral=True
