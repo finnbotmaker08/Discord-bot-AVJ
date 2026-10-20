@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from flask import Flask
 from TikTokLive import TikTokLiveClient
 
-# --- FLASK WEBSERVER VOOR RENDER (HOUDT DE BOT DRAAIEND) ---
+# --- FLASK WEBSERVER VOOR RENDER ---
 app = Flask("")
 
 
@@ -28,7 +28,6 @@ def keep_alive():
   t.start()
 
 
-# Start de webserver op de achtergrond
 keep_alive()
 
 load_dotenv()
@@ -72,7 +71,6 @@ SAY_ROLE_IDS = [
     1562095503645212752,
 ]
 
-# ROLLEN DIE ALLES MOGEN:
 ROLES_ALLES_MOGEN = [1545038388091166790, 1562095503645212752]
 
 CHANNEL_AANVRAAG = 1555910106040762408
@@ -100,7 +98,7 @@ current_user_assignment = {}
 user_reroll_count = {}
 claimed_assignments = set()
 
-# SCHONE PARTNER TEKST ZONDER EMBED-LIJNEN / FIGUURTJES
+# RUIMTELIJK EN OVERZICHTELIJK BERICHT
 EXACT_PARTNER_BERICHT = (
     "AVJ Online Winkel is een online winkel met verschillende Roblox producten.\n\n"
     "Wat hebben wij te bieden aan jou?\n\n"
@@ -579,7 +577,6 @@ class DenyReasonModal(discord.ui.Modal, title="Aanvraag Afkeuren"):
     except Exception:
       pass
 
-    # MOOIE EMBED NAAR DE GEBRUIKER VOOR AFKEURING
     try:
       embed_deny = discord.Embed(
           title="❌ Partner Aanvraag Afgekeurd",
@@ -698,44 +695,41 @@ class PartnerMemberCheckView(discord.ui.View):
   @discord.ui.button(
       label="Ja",
       style=discord.ButtonStyle.green,
-      custom_id="avj_partner_members_yes",
+      custom_id="avj_partner_members_yes_v18",
   )
   async def members_yes(
       self, interaction: discord.Interaction, button: discord.ui.Button
   ):
-    await safe_defer(interaction)
     for child in self.children:
       child.disabled = True
     try:
-      await interaction.message.edit(view=self)
+      await interaction.response.edit_message(view=self)
     except Exception:
       pass
 
-    await interaction.followup.send(
-        f"Top!\n\nPlaats dit bericht in jouw server:\n\n{EXACT_PARTNER_BERICHT}\n\nStuur daarna een screenshot in deze DM:",
-        ephemeral=False,
-    )
+    # VERZENDT HET BERICHT DUIDELIJK RUIMTELIJK IN DE DM
+    await interaction.channel.send("Top!\n\nPlaats dit bericht in jouw server:")
+    await interaction.channel.send(f"{EXACT_PARTNER_BERICHT}")
+    await interaction.channel.send("Stuur daarna een screenshot in deze DM:")
 
   @discord.ui.button(
       label="Nee",
       style=discord.ButtonStyle.red,
-      custom_id="avj_partner_members_no",
+      custom_id="avj_partner_members_no_v18",
   )
   async def members_no(
       self, interaction: discord.Interaction, button: discord.ui.Button
   ):
-    await safe_defer(interaction)
     for child in self.children:
       child.disabled = True
     try:
-      await interaction.message.edit(view=self)
+      await interaction.response.edit_message(view=self)
     except Exception:
       pass
 
     partner_cooldowns.pop(self.user_id, None)
-    await interaction.followup.send(
-        "Helaas, je hebt minimaal 15 leden nodig om partner te kunnen worden met AVJ Online Winkel.",
-        ephemeral=False,
+    await interaction.channel.send(
+        "Helaas, je hebt minimaal 15 leden nodig om partner te kunnen worden met AVJ Online Winkel."
     )
 
 
@@ -747,7 +741,7 @@ class PartnerStartView(discord.ui.View):
   @discord.ui.button(
       label="Start Partner Aanvraag",
       style=discord.ButtonStyle.green,
-      custom_id="avj_partner_start_btn_v15",
+      custom_id="avj_partner_start_btn_v18",
   )
   async def start_partner_button(
       self, interaction: discord.Interaction, button: discord.ui.Button
