@@ -579,10 +579,21 @@ class DenyReasonModal(discord.ui.Modal, title="Aanvraag Afkeuren"):
     except Exception:
       pass
 
+    # MOOIE EMBED NAAR DE GEBRUIKER VOOR AFKEURING
     try:
-      await self.member.send(
-          f"Afgekeurd.\nReden: {self.reden.value}"
+      embed_deny = discord.Embed(
+          title="❌ Partner Aanvraag Afgekeurd",
+          description="Helaas is je partner-aanvraag voor **AVJ Online Winkel** niet goedgekeurd.",
+          color=discord.Color.red(),
+          timestamp=datetime.now(timezone.utc)
       )
+      embed_deny.add_field(
+          name="📌 Reden van afkeuring",
+          value=f"```{self.reden.value}```",
+          inline=False
+      )
+      embed_deny.set_footer(text="AVJ Online Winkel • Partner Beheer")
+      await self.member.send(embed=embed_deny)
     except discord.Forbidden:
       pass
 
@@ -634,7 +645,14 @@ class PartnerReviewView(discord.ui.View):
             print(f"Fout bij toewijzen rol: {e}")
 
     try:
-      await self.member.send("Je partner-aanvraag is geaccepteerd!")
+      embed_accept = discord.Embed(
+          title="✅ Partner Aanvraag Goedgekeurd!",
+          description="Gefeliciteerd! Je partner-aanvraag voor **AVJ Online Winkel** is geaccepteerd.",
+          color=discord.Color.green(),
+          timestamp=datetime.now(timezone.utc)
+      )
+      embed_accept.set_footer(text="AVJ Online Winkel • Partner Beheer")
+      await self.member.send(embed=embed_accept)
     except discord.Forbidden:
       pass
 
@@ -693,7 +711,6 @@ class PartnerMemberCheckView(discord.ui.View):
     except Exception:
       pass
 
-    # GEEN FIGUURTJES / EMOJI'S MEER
     await interaction.followup.send(
         f"Top!\n\nPlaats dit bericht in jouw server:\n\n{EXACT_PARTNER_BERICHT}\n\nStuur daarna een screenshot in deze DM:",
         ephemeral=False,
@@ -841,9 +858,7 @@ async def on_message(message):
           await aanvraag_kanaal.send(
               embed=embed, view=PartnerReviewView(message.author)
           )
-          await message.channel.send(
-              "Ingediend bij het beheerteam!"
-          )
+          await message.channel.send("Ingediend Bij Team AVJ.")
         else:
           await message.channel.send(
               "Er is een fout opgetreden: het aanvraagkanaal kon niet worden"
