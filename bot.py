@@ -100,18 +100,18 @@ current_user_assignment = {}
 user_reroll_count = {}
 claimed_assignments = set()
 
+# SCHONE PARTNER TEKST ZONDER EMBED-LIJNEN / FIGUURTJES
 EXACT_PARTNER_BERICHT = (
-    "# 👋 AVJ Online Winkel is een online winkel met verschillende Roblox"
-    " producten.\n> \n> • What haben wij te bieden aan jou?\n> \n> 🟢 Heel veel"
-    " gratis Roblox producten.\n> \n> 😉 Wij hebben heel veel keuze aan Roblox"
-    " producten die je kunt kopen.\n> \n> 🤝 Wij helpen graag mensen die"
-    " partner met ons willen worden.\n> \n> 🛠 Wij helpen graag mensen die"
-    " problemen hebben met hun Roblox studio.\n> \n> 🤑 We zijn ook nog op zoek"
-    " naar medewerkers die bij ons willen werken, dus misschien ben jij wel"
-    " geschikt en lijkt het je leuk.\n> \n> ● Iedereen is van harte welkom om"
-    " een kijkje te nemen in onze discord server.\n\n> 📸 Video:"
-    " https://media.discordapp.net/attachments/1499730647219175464/1499730650272497745/Schermopname_2026-05-01_131436.mp4\n\n> 🔗"
-    " https://discord.gg/hBeUBKUAsu"
+    "AVJ Online Winkel is een online winkel met verschillende Roblox producten.\n\n"
+    "Wat hebben wij te bieden aan jou?\n\n"
+    "Heel veel gratis Roblox producten.\n\n"
+    "Wij hebben heel veel keuze aan Roblox producten die je kunt kopen.\n\n"
+    "Wij helpen graag mensen die partner met ons willen worden.\n\n"
+    "Wij helpen graag mensen die problemen hebben met hun Roblox studio.\n\n"
+    "We zijn ook nog op zoek naar medewerkers die bij ons willen werken, dus misschien ben jij wel geschikt en lijkt het je leuk.\n\n"
+    "Iedereen is van harte welkom om een kijkje te nemen in onze discord server.\n\n"
+    "Video: https://media.discordapp.net/attachments/1499730647219175464/1499730650272497745/Schermopname_2026-05-01_131436.mp4\n\n"
+    "https://discord.gg/hBeUBKUAsu"
 )
 
 
@@ -124,7 +124,6 @@ async def safe_defer(interaction: discord.Interaction):
 
 
 def heeft_toestemming(interaction: discord.Interaction) -> bool:
-  """Controleert of iemand owner is of een van de toegestane beheerrollen heeft."""
   if interaction.user.id in OWNER_IDS:
     return True
   if interaction.guild and hasattr(interaction.user, "roles"):
@@ -582,7 +581,7 @@ class DenyReasonModal(discord.ui.Modal, title="Aanvraag Afkeuren"):
 
     try:
       await self.member.send(
-          f"❌ Afgekeurd.\n**Reden:** {self.reden.value}"
+          f"Afgekeurd.\nReden: {self.reden.value}"
       )
     except discord.Forbidden:
       pass
@@ -600,7 +599,7 @@ class PartnerReviewView(discord.ui.View):
   async def interaction_check(self, interaction: discord.Interaction) -> bool:
     if heeft_toestemming(interaction):
       return True
-    await interaction.response.send_message("❌ Geen toestemming.", ephemeral=True)
+    await interaction.response.send_message("Geen toestemming.", ephemeral=True)
     return False
 
   @discord.ui.button(
@@ -635,7 +634,7 @@ class PartnerReviewView(discord.ui.View):
             print(f"Fout bij toewijzen rol: {e}")
 
     try:
-      await self.member.send("✅ Je partner-aanvraag is geaccepteerd!")
+      await self.member.send("Je partner-aanvraag is geaccepteerd!")
     except discord.Forbidden:
       pass
 
@@ -648,8 +647,8 @@ class PartnerReviewView(discord.ui.View):
     log_kanaal = await get_guild_channel_safe(guild, CHANNEL_LOGS)
     if log_kanaal:
       embed_log = discord.Embed(
-          title="✅ Partner Geaccepteerd",
-          description=f"**Aanvrager:** {self.member.mention}",
+          title="Partner Geaccepteerd",
+          description=f"Aanvrager: {self.member.mention}",
           color=discord.Color.green(),
       )
       await log_kanaal.send(embed=embed_log)
@@ -694,10 +693,9 @@ class PartnerMemberCheckView(discord.ui.View):
     except Exception:
       pass
 
+    # GEEN FIGUURTJES / EMOJI'S MEER
     await interaction.followup.send(
-        f"✅ Top!\n\nPlaats dit bericht in jouw"
-        f" server:\n\n{EXACT_PARTNER_BERICHT}\n\n📸 **Stuur daarna een screenshot"
-        " in deze DM:**",
+        f"Top!\n\nPlaats dit bericht in jouw server:\n\n{EXACT_PARTNER_BERICHT}\n\nStuur daarna een screenshot in deze DM:",
         ephemeral=False,
     )
 
@@ -719,8 +717,7 @@ class PartnerMemberCheckView(discord.ui.View):
 
     partner_cooldowns.pop(self.user_id, None)
     await interaction.followup.send(
-        "❌ Helaas, je hebt minimaal 15 leden nodig om partner te kunnen"
-        " worden met AVJ Online Winkel.",
+        "Helaas, je hebt minimaal 15 leden nodig om partner te kunnen worden met AVJ Online Winkel.",
         ephemeral=False,
     )
 
@@ -746,7 +743,7 @@ class PartnerStartView(discord.ui.View):
         user_id
     ] < timedelta(hours=12):
       await interaction.followup.send(
-          "⏳ Je kunt dit maar 1x per 12 uur doen.", ephemeral=True
+          "Je kunt dit maar 1x per 12 uur doen.", ephemeral=True
       )
       return
 
@@ -754,14 +751,14 @@ class PartnerStartView(discord.ui.View):
     try:
       dm = await interaction.user.create_dm()
       await dm.send(
-          "❓ **Heb je 15 of meer leden in je Discord server?**",
+          "Heb je 15 of meer leden in je Discord server?",
           view=PartnerMemberCheckView(user_id),
       )
       await interaction.followup.send("Check je DM!", ephemeral=True)
     except discord.Forbidden:
       partner_cooldowns.pop(user_id, None)
       await interaction.followup.send(
-          "❌ Kan geen DM sturen.", ephemeral=True
+          "Kan geen DM sturen.", ephemeral=True
       )
 
 
@@ -819,7 +816,7 @@ async def on_message(message):
       if user_id not in pending_partner_submissions:
         pending_partner_submissions[user_id] = message.attachments[0].url
         await message.channel.send(
-            "📸 Ontvangen! Stuur nu je partner bericht in deze DM:"
+            "Ontvangen! Stuur nu je partner bericht in deze DM:"
         )
 
     elif message.content:
@@ -832,7 +829,7 @@ async def on_message(message):
 
         if aanvraag_kanaal:
           embed = discord.Embed(
-              title="🤝 Nieuwe Partner Aanvraag",
+              title="Nieuwe Partner Aanvraag",
               description=(
                   f"**Gebruiker:**"
                   f" {message.author.mention}\n\n{message.content}"
@@ -845,11 +842,11 @@ async def on_message(message):
               embed=embed, view=PartnerReviewView(message.author)
           )
           await message.channel.send(
-              "✅ Ingediend bij het beheerteam!"
+              "Ingediend bij het beheerteam!"
           )
         else:
           await message.channel.send(
-              "❌ Er is een fout opgetreden: het aanvraagkanaal kon niet worden"
+              "Er is een fout opgetreden: het aanvraagkanaal kon niet worden"
               " gevonden."
           )
 
@@ -862,7 +859,7 @@ async def on_message(message):
 async def devopdracht_panel(interaction: discord.Interaction):
   await safe_defer(interaction)
   if not heeft_toestemming(interaction):
-    await interaction.followup.send("❌ Geen toestemming.", ephemeral=True)
+    await interaction.followup.send("Geen toestemming.", ephemeral=True)
     return
 
   embed = discord.Embed(
@@ -871,7 +868,7 @@ async def devopdracht_panel(interaction: discord.Interaction):
       color=discord.Color.blue(),
   )
   await interaction.channel.send(embed=embed, view=DevStartView())
-  await interaction.followup.send("✅ Geplaatst!", ephemeral=True)
+  await interaction.followup.send("Geplaatst!", ephemeral=True)
 
 
 @bot.tree.command(
@@ -883,7 +880,7 @@ async def devopdracht_panel(interaction: discord.Interaction):
 async def resetpartner(interaction: discord.Interaction, gebruiker: discord.User):
   await safe_defer(interaction)
   if not heeft_toestemming(interaction):
-    await interaction.followup.send("❌ Geen toestemming.", ephemeral=True)
+    await interaction.followup.send("Geen toestemming.", ephemeral=True)
     return
 
   partner_cooldowns.pop(gebruiker.id, None)
@@ -894,7 +891,7 @@ async def resetpartner(interaction: discord.Interaction, gebruiker: discord.User
     partner_cooldowns.pop(k, None)
 
   await interaction.followup.send(
-      f"✅ Partner cooldown voor {gebruiker.mention} is succesvol gereset!",
+      f"Partner cooldown voor {gebruiker.mention} is succesvol gereset!",
       ephemeral=True,
   )
 
@@ -946,7 +943,7 @@ async def say_command(
 ):
   await safe_defer(interaction)
   if not heeft_toestemming(interaction):
-    await interaction.followup.send("❌ Geen toestemming.", ephemeral=True)
+    await interaction.followup.send("Geen toestemming.", ephemeral=True)
     return
 
   file = await afbeelding.to_file() if afbeelding else None
@@ -961,13 +958,13 @@ async def say_command(
 async def partnerpanel(interaction: discord.Interaction):
   await safe_defer(interaction)
   if not heeft_toestemming(interaction):
-    await interaction.followup.send("❌ Geen toestemming.", ephemeral=True)
+    await interaction.followup.send("Geen toestemming.", ephemeral=True)
     return
 
   target = await get_guild_channel_safe(interaction.guild, CHANNEL_PARTNER_PANEL)
   if not target:
     await interaction.followup.send(
-        "❌ Partner panel kanaal kon niet worden gevonden.", ephemeral=True
+        "Partner panel kanaal kon niet worden gevonden.", ephemeral=True
     )
     return
 
@@ -992,7 +989,7 @@ async def partnerpanel(interaction: discord.Interaction):
 
   await target.send(embed=embed, view=PartnerStartView())
   await interaction.followup.send(
-      f"✅ Partner panel succesvol geplaatst in {target.mention}!", ephemeral=True
+      f"Partner panel succesvol geplaatst in {target.mention}!", ephemeral=True
   )
 
 
